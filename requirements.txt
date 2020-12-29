@@ -1,0 +1,4 @@
+keras==2.1.6
+scikit-image
+opencv-python
+imgaug==0.2.6
