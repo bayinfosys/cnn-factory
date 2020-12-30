@@ -11,4 +11,6 @@ RUN apt-get update && \
 
 COPY ./src /src
 
-CMD python3 /src/train.py
+ENTRYPOINT ["python3", "/src/train.py"]
+
+CMD ["--help"]

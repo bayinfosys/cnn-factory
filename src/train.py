@@ -40,7 +40,7 @@ def build_model(image_shape=(None, None), num_outputs=1):
   model = UNet(
       image_shape=image_shape,
       channel_count=3,
-      network_depth=6,
+      network_depth=5,
 #      filter_sizes=[32]*4,
   )()
 
