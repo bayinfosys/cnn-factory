@@ -1,14 +1,7 @@
 from keras import layers
 from keras.layers import Input, Activation
-from keras.layers import Convolution3D
-from keras.layers import MaxPooling3D
-from keras.layers import UpSampling3D
-from keras.layers import Conv3DTranspose
-
-from keras.layers import Convolution2D
-from keras.layers import MaxPooling2D
-from keras.layers import Conv2DTranspose
-from keras.layers import UpSampling2D
+from keras.layers import Convolution3D, MaxPooling3D, UpSampling3D, Conv3DTranspose
+from keras.layers import Convolution2D, MaxPooling2D, Conv2DTranspose, UpSampling2D
 
 from keras.models import Model
 
@@ -100,30 +93,27 @@ class UNet():
 
     if position < depth: # down
       print("  down")
-      with tf.name_scope(layer_name):
-        A = function_context["conv_fn"](filter_size, conv_size, activation="relu", padding="same")(layer_stack.pop())
-        A = function_context["conv_fn"](filter_size, conv_size, activation="relu", padding="same")(A)
-        B = function_context["pool_fn"](pool_size=pool_size, padding="same")(A)
-        layer_stack.append(A)
-        layer_stack.append(B)
+      A = function_context["conv_fn"](filter_size, conv_size, activation="relu", padding="same")(layer_stack.pop())
+      A = function_context["conv_fn"](filter_size, conv_size, activation="relu", padding="same")(A)
+      B = function_context["pool_fn"](pool_size=pool_size, padding="same")(A)
+      layer_stack.append(A)
+      layer_stack.append(B)
     if position == depth: # apex
       print("  nadir")
-      with tf.name_scope(layer_name):
-        A = function_context["conv_fn"](filter_size, conv_size, activation="relu", padding="same")(layer_stack.pop())
-        A = function_context["conv_fn"](filter_size, conv_size, activation="relu", padding="same", name="nadir")(A)
-        layer_stack.append(A)
+      A = function_context["conv_fn"](filter_size, conv_size, activation="relu", padding="same")(layer_stack.pop())
+      A = function_context["conv_fn"](filter_size, conv_size, activation="relu", padding="same", name="nadir")(A)
+      layer_stack.append(A)
     if position > depth: # back up
       print("  up")
       if function_context["trns_fn"] is UpSampling2D or function_context["trns_fn"] is UpSampling3D:
         deconv = function_context["trns_fn"](pool_size)(layer_stack.pop())
       elif function_context["trns_fn"] is Conv2DTranspose or function_context["trns_fn"] is Conv3DTranspose:
         deconv = function_context["trns_fn"](filter_size, stride_size=pool_size)(layer_stack.pop())
-      with tf.name_scope(layer_name):
-#        A = layers.concatenate([deconv, layer_stack.pop()], axis=cat_axis)
-        A = function_context["link_fn"]([deconv, layer_stack.pop()])
-        A = function_context["conv_fn"](filter_size, conv_size, activation="relu", padding="same")(A)
-        A = function_context["conv_fn"](filter_size, conv_size, activation="relu", padding="same")(A)
-        layer_stack.append(A)
+#      A = layers.concatenate([deconv, layer_stack.pop()], axis=cat_axis)
+      A = function_context["link_fn"]([deconv, layer_stack.pop()])
+      A = function_context["conv_fn"](filter_size, conv_size, activation="relu", padding="same")(A)
+      A = function_context["conv_fn"](filter_size, conv_size, activation="relu", padding="same")(A)
+      layer_stack.append(A)
 
   @staticmethod
   def build_inception_layer(
@@ -224,10 +214,8 @@ class UNet():
 
     print("UNET [%i] : %s" %(len(self.filter_sizes), str(self.filter_sizes)))
 
-    with tf.name_scope("unet"):
-      with tf.name_scope("inputs"):
-        inputs = Input(self.image_shape + (self.channel_count, ))
-        layer_stack.append(inputs)
+    inputs = Input(self.image_shape + (self.channel_count, ))
+    layer_stack.append(inputs)
 
   #    for i, idx in enumerate(bounce_index(0, len(self.filter_sizes))):
   #  #    if i<network_u_depth:
@@ -249,50 +237,45 @@ class UNet():
   #      if i == self.depth-1:
   #        self.encoder_output_name = "nadir" #layer_stack[-1].name
 
-      # encoder
-      with tf.name_scope("encoder"):
-        for i, filter_size in enumerate(self.filter_sizes):
-          name = "encoder_%i_%d" %(i, filter_size)
-          self.layer_builder(
-              name,
-              self.image_shape,
-              filter_size,
-              layer_stack,
-              self.depth-1,
-              i,
-              function_context)
+    # encoder
+    for i, filter_size in enumerate(self.filter_sizes):
+      name = "encoder_%i_%d" %(i, filter_size)
+      self.layer_builder(
+          name,
+          self.image_shape,
+          filter_size,
+          layer_stack,
+          self.depth-1,
+          i,
+          function_context)
 
-          if i == self.depth-1:
-            self.encoder_output_name = "nadir" #layer_stack[-1].name
+      if i == self.depth-1:
+        self.encoder_output_name = "nadir" #layer_stack[-1].name
 
-      outputs = []
+    outputs = []
 
-      for output_name in self.output_names:
-        local_layer_stack = list(layer_stack)
+    for output_name in self.output_names:
+      local_layer_stack = list(layer_stack)
 
-        with tf.name_scope("decoder_%s" % output_name):
-          for i, filter_size in enumerate(self.filter_sizes[:-1][::-1]):
-            idx = len(self.filter_sizes)+i
-            name = "%s_%i_%d" % (output_name, idx, filter_size)
-            self.layer_builder(
-                name,
-                self.image_shape,
-                filter_size,
-                local_layer_stack,
-                self.depth-1,
-                idx,
-                function_context)
+      for i, filter_size in enumerate(self.filter_sizes[:-1][::-1]):
+        idx = len(self.filter_sizes)+i
+        name = "%s_%i_%d" % (output_name, idx, filter_size)
+        self.layer_builder(
+            name,
+            self.image_shape,
+            filter_size,
+            local_layer_stack,
+            self.depth-1,
+            idx,
+            function_context)
 
-          with tf.name_scope("output_%s" % output_name):
-            # FIXME: define this as a decoder output the same way we do labels?
-            outputs += [function_context["conv_fn"](1, sigmoid_conv_size, activation="sigmoid", name=output_name)(local_layer_stack.pop())]
+      # FIXME: define this as a decoder output the same way we do labels?
+      outputs += [function_context["conv_fn"](1, sigmoid_conv_size, activation="sigmoid", name=output_name)(local_layer_stack.pop())]
 
-      print("layer_stack_length : %i" % len(local_layer_stack))
-      assert(len(local_layer_stack) == 0) # ensure stack is exhausted
+    print("layer_stack_length : %i" % len(local_layer_stack))
+    assert(len(local_layer_stack) == 0) # ensure stack is exhausted
 
     print("num outputs : %i" % len(outputs))
 
-    with tf.name_scope("training_process"):
-      model = Model(inputs=[inputs], outputs=outputs)
-
+    model = Model(inputs=[inputs], outputs=outputs)
     return model
