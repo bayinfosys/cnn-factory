@@ -21,16 +21,9 @@ docker run \
   --rm \
   --runtime=nvidia \
   -v $(pwd)/src:/src \
+  -v $(pwd)/examples/args:/args \
   -v $(pwd)/data/dummy:/data \
   -v $(pwd)/output:/out \
   -u $(id -u):$(id -g) \
-  anax32/cnn-factory \
-    --modelname 'my-model' \
-    --images '/data/images/*.png' \
-    --masks '/data/labels/*.png' \
-    --batch-size 1 \
-    --num-augs 4 \
-    --num-epochs 800 \
-    --output-path '/out/models/' \
-    --shuffle-data \
-    --learning-rate 0.0001
+  -e ARGS_FILE=/args/train.args.run.01 \
+  anax32/cnn-factory

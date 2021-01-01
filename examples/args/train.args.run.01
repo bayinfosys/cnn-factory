@@ -1,0 +1,19 @@
+[
+  "--modelname", "my-model",
+  "--images", "/data/images/*.png",
+  "--masks", "/data/labels/*.png",
+  "--output-path", "/out/models/",
+
+  "--batch-size", "1",
+  "--num-augs", "0",
+  "--num-epochs", "800",
+  "--shuffle-data",
+
+  "--learning-rate", "0.0001",
+  "--loss-function", "bce_dice",
+  "--training-metrics", "dice",
+
+  "--network-depth", "4",
+  "--channel-count", "3",
+  "--image-shape", "256", "256"
+]

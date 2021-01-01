@@ -1,0 +1,95 @@
+{
+  "--modelname":
+    {"help": "name of the model; data would be stored under /out/models/<modelname>/",
+     "default": "default_model_name"
+    },
+  "--image-shape":
+    {"help": "width and height of the input images",
+     "type": "int",
+     "nargs": "+",
+     "default": "(256, 256)"
+    },
+  "--channel-count":
+    {"help": "number of channels in the input image data",
+     "type": "int",
+     "default": 3
+    },
+  "--network-depth":
+    {"help": "depth parameter of the network architecture",
+     "type": "int",
+     "default": 3
+    },
+
+  "--images":
+    {"help": "glob file pattern of a list of images",
+     "required": "True"
+    },
+  "--masks":
+    {"help": "glob file pattern of a list of masks matching the image names",
+     "required": "True"
+    },
+  "--num-augs":
+    {"help": "number of augmentations to apply for each input",
+     "type": "int",
+     "default": 0
+    },
+
+  "--batch-size":
+    {"help": "batch size to use in training. NB: only values of 1 are supported",
+     "type": "int",
+     "default": 1
+    },
+  "--num-epochs":
+    {"help": "maximum number of training epochs",
+     "type": "int",
+     "default": 800
+    },
+  "--shuffle-data":
+    {"help": "shuffle data before each epoch",
+     "default": "True",
+     "action": "store_true"
+    },
+  "--learning-rate":
+    {"help": "initial training rate",
+     "default": 0.0001,
+     "type": "float"
+    },
+  "--learning-rate-scheduler":
+    {"help": "learning rate schedule function",
+     "choices": ["none",
+                 "halving",
+                 "step_decay"],
+     "default": "none"
+    },
+  "--loss-function":
+    {"help": "loss function",
+     "choices": ["bce_dice", "dice",
+                 "binary_crossentropy",
+                 "jaccard"],
+     "default": "dice"
+    },
+  "--optimizer":
+    {"help": "optimisation strategy",
+     "choices": ["sgd", "rmsprop", "adagrad",
+                 "adadelta", "adam", "adamax",
+                 "nadam"],
+     "default": "adam"
+    },
+  "--training-metrics":
+    {"help": "metrics to run during training",
+     "nargs": "+",
+     "default": "dice"
+    },
+  "--training-steps":
+    {"help": "maximum training steps per epoch",
+     "type": "int"
+    },
+  "--validation-steps":
+    {"help": "maximum validation steps per epoch",
+     "type": "int"
+    },
+  "--output-path":
+    {"help": "path for model checkpoints",
+     "default": "/out/models"
+    }
+}

@@ -27,3 +27,21 @@ docker run \
     --shuffle-data \
     --learning-rate 0.0001
 ```
+
+## ARGS file
+
+A json file with arg values can be passed into the container:
+
+```bash
+docker run \
+  -it \
+  --rm \
+  --runtime=nvidia \
+  -v $(pwd)/src:/src \
+  -v $(pwd)/examples/args:/args \
+  -v $(pwd)/data/dummy:/data \
+  -v $(pwd)/output:/out \
+  -u $(id -u):$(id -g) \
+  -e ARGS_FILE=/args/train.args.run.01 \
+  anax32/cnn-factory
+```

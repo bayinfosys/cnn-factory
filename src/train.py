@@ -26,23 +26,35 @@ logging.getLogger("PIL").setLevel(logging.WARNING)
 logging.getLogger("matplotlib").setLevel(logging.WARNING)
 
 
-def build_model(image_shape=(None, None), num_outputs=1):
-  """build and return a model to the caller
+def model_builder_fn(
+      model_type="unet",
+      image_shape=(None, None),
+      channel_count=3,
+      network_depth=5
+    ):
+  """
+  build and return a model to the caller
   """
   from training.models import get_model_memory_usage, ConvNet, UNet
 
-#  model = ConvNet(
-#      image_shape=image_shape,
-#      channel_count=3,
-#      network_depth=3,
-#  )()
+  logger.info("building model with: '%s', '%s', %i, %i" % (
+      model_type, str(image_shape), channel_count, network_depth))
 
-  model = UNet(
-      image_shape=image_shape,
-      channel_count=3,
-      network_depth=5,
-#      filter_sizes=[32]*4,
-  )()
+  model_type_fns = {
+    "convnet": ConvNet,
+    "unet": UNet
+  }
+
+  # FIXME: filter_sizes is also a valid param
+  try:
+    model = model_type_fns[model_type](
+                image_shape=image_shape,
+                channel_count=channel_count,
+                network_depth=network_depth
+            )()
+  except KeyError as e:
+    logger.error("'%s' is not a supported model type" % model_type)
+    raise
 
   print(model.summary())
   mem_req = get_model_memory_usage(1, model)
@@ -50,21 +62,49 @@ def build_model(image_shape=(None, None), num_outputs=1):
   return model
 
 
-def compile_model(model, **kwargs):
-  """compile the model with an optimizer and loss function
+def model_compiler_fn(
+        model,
+        optimizer_name,
+        loss_fn_name,
+        metric_names,
+        learning_rate
+    ):
   """
-  import keras.optimizers
+  compile the model with an optimizer and loss function
+  """
+  import keras
 
-  optimizer = keras.optimizers.Adam(lr=kwargs.get("learning_rate", 0.0001))
+  logger.info("compiling model with: '%s', '%s', '%s', %f" % (
+      optimizer_name, loss_fn_name, str(metric_names), learning_rate))
+
+  optimizer_fns = {
+      "sgd": keras.optimizers.SGD,
+      "rmsprop": keras.optimizers.RMSprop,
+      "adagrad": keras.optimizers.Adagrad,
+      "adadelta": keras.optimizers.Adadelta,
+      "adam": keras.optimizers.Adam,
+      "adamax": keras.optimizers.Adamax,
+      "nadam": keras.optimizers.Nadam
+  }
+
+  optimizer_args={"lr": learning_rate}
+
+  loss_fns = {
+      "bce_dice": bce_dice,
+      "dice": dice_coef_loss,
+      "binary_crossentropy": "binary_crossentropy",
+      "jaccard": jaccard_index_loss
+  }
+
+  metric_fns = {
+      "dice": dice_coef
+  }
 
   # compile the model
   model.compile(
-      optimizer=optimizer,
-      loss=bce_dice,
-#      loss=dice_coef_loss
-#      loss="binary_crossentropy",
-#      loss=jaccard_index_loss,
-      metrics=[dice_coef]
+      optimizer=optimizer_fns[optimizer_name](**optimizer_args),
+      loss=loss_fns[loss_fn_name],
+      metrics=[metric_fns[m] for m in metric_names]
   )
 
 
@@ -270,9 +310,9 @@ def image_from_filenames_generator_with_augmentation(Xs, ys, shuffle_data=False,
 
 
 def train_model(
-    model_name,
-    model_builder,
-    model_compiler,
+    modelname,
+    model_builder_fn,
+    model_compiler_fn,
     images,
     masks,
     batch_size,
@@ -295,11 +335,11 @@ def train_model(
   except OSError:
     pass
 
-  model_filename = join(output_dir, model_name + ".hdf5")
+  model_filename = join(output_dir, modelname + ".hdf5")
 
   # MODEL
-  model = build_model((256, 256))
-  compile_model(model, learning_rate=learning_rate)
+  model = model_builder_fn()
+  model_compiler_fn(model)
 
   # DATA
   from sklearn.model_selection import train_test_split
@@ -340,13 +380,73 @@ def train_model(
                       workers=1,
                       use_multiprocessing=False)
 
+  # FIXME: can we ditch this? the checkpoint should handle all this for us
   logger.info("saving model to '%s'" % model_filename)
   model.save(model_filename)
 
 
-if __name__ == "__main__":
+def get_argument_parser():
+  """
+  set up the argparse parser
+  """
   import argparse
   import json
+
+  parser = argparse.ArgumentParser(
+      description="train network on image/mask pairs"
+  )
+
+  if "ARGS_SPEC" not in os.environ:
+    logger.info("ARGS_SPEC environment variable not set, using default value")
+    os.environ["ARGS_SPEC"] = "/src/train.args.spec.json"
+
+  logger.info("parsing args.spec from '%s'" % os.environ["ARGS_SPEC"])
+
+  # NOTE: FileNotFoundError intentionally causes termination
+  with open(os.environ["ARGS_SPEC"], "r") as f:
+    import builtins
+    args_spec = json.load(f)
+    for name, arg_spec in args_spec.items():
+      logger.debug("argument: ['%s'] '%s" % (name, str(arg_spec)))
+      # if the type is given, convert it to the callable function
+      # from builtins (FIXME: what if it is a custom type?)
+      if "type" in arg_spec:
+        arg_spec["type"] = getattr(builtins, arg_spec["type"])
+
+      parser.add_argument(name, **arg_spec)
+
+  return parser
+
+
+def parse_arguments(parser):
+  """
+  parse the process arguments from commandline or file
+  """
+  import json
+
+  if "ARGS_FILE" in os.environ:
+    # read the args from a json file
+    logger.info("parsing '%s'" % os.environ["ARGS_FILE"])
+
+    # NOTE: FileNotFoundError intentionally causes termination
+    with open(os.environ["ARGS_FILE"], "r") as f:
+      file_args = json.load(f)
+
+    logger.info("args: '%s'" % json.dumps(file_args))
+    args = parser.parse_args(file_args)
+  else:
+    # parse the args from the command line
+    logger.info("parsing commandline")
+
+    # FIXME: can't we capture and send the commandline as a param?
+    #        therefore avoid the branched call here
+    logger.info("args: %s", str(sys.argv))
+    args = parser.parse_args()
+
+  return args
+
+
+if __name__ == "__main__":
   import sys
   import os
   from os.path import exists
@@ -361,19 +461,8 @@ if __name__ == "__main__":
   ch.setFormatter(formatter)
   root.addHandler(ch)
 
-  parser = argparse.ArgumentParser(
-      description="train network on image/mask pairs"
-  )
-  parser.add_argument("--modelname", default="unamed", help="name")
-  parser.add_argument("--batch-size", "-b", default=8, type=int, help="batch size")
-  parser.add_argument("--num-augs", default=0, type=int, help="number of augmentations")
-  parser.add_argument("--num-epochs", "-e", default=100, type=int, help="number of epochs")
-  parser.add_argument("--shuffle-data", action="store_true")
-  parser.add_argument("--learning-rate", default=0.0001, type=float)
-  parser.add_argument("--output-path", default="models", help="output dir")
-  parser.add_argument("--images", required=True)
-  parser.add_argument("--masks", required=True)
-  args = parser.parse_args()
+  parser = get_argument_parser()
+  args = parse_arguments(parser)
 
   images = sorted(glob(args.images))
   masks = sorted(glob(args.masks))
@@ -397,9 +486,9 @@ if __name__ == "__main__":
   #K.set_session(tf.Session(config=config))
 
   train_model(
-      model_name=args.modelname,
-      model_builder=build_model,
-      model_compiler=compile_model,
+      modelname=args.modelname,
+      model_builder_fn=lambda: model_builder_fn(image_shape=tuple(args.image_shape), channel_count=3, network_depth=args.network_depth),
+      model_compiler_fn=lambda x: model_compiler_fn(x, optimizer_name=args.optimizer, loss_fn_name=args.loss_function, metric_names=args.training_metrics, learning_rate=args.learning_rate),
       images=images,
       masks=masks,
       batch_size=args.batch_size,
