@@ -1,7 +1,12 @@
 {
   "--modelname":
-    {"help": "name of the model; data would be stored under /out/models/<modelname>/",
+    {"help": "name of the model; data would be stored under <output-path>/<modelname>/",
      "default": "default_model_name"
+    },
+  "--modeltype":
+    {"help": "model architecture",
+     "choices": ["unet", "convnet"],
+     "default": "unet"
     },
   "--image-shape":
     {"help": "width and height of the input images",

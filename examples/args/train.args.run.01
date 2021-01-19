@@ -1,5 +1,6 @@
 [
   "--modelname", "my-model",
+  "--modeltype", "unet",
   "--images", "/data/images/*.png",
   "--masks", "/data/labels/*.png",
   "--output-path", "/out/models/",

@@ -1,7 +1,6 @@
 import sys
 import logging
 
-from os import makedirs
 from os.path import join, basename
 
 from keras import backend as K
@@ -107,8 +106,113 @@ def model_compiler_fn(
       metrics=[metric_fns[m] for m in metric_names]
   )
 
+def keras_callbacks_fn(
+        model,
+        modelname,
+        output_dir,
+    ):
+  """
+  creates callbacks for keras training process
 
-def process_image(filename):
+  creates:
+    + tensorboard callback: logs are written to <output_dir>/logs/<modelname>
+    + checkpoint model: saves best validation score model to <output_dir>/<modelname>.hdf5
+    + early stopping: stops training when validation hasn't improved for 25 epochs
+    + learning rate schedular: reduces learning rate by half every 20 epochs
+
+  returns:
+    list of callbacks which can be passed directly to keras.fit
+
+  TODO:
+    TFRunMetaData: captures GPU usage, memory stats etc, but requires at least series 10 GPU
+    WeightWriter: custom callback to output weights; needs integrating
+    ValidationOutput: custom callback to output results of validation steps; needs integrating
+  """
+  from os import makedirs
+
+  from keras.callbacks import (TensorBoard as TensorBoardCallback,
+                               ModelCheckpoint as ModelCheckpointCallback,
+                               EarlyStopping as EarlyStoppingCallback,
+                               LearningRateScheduler)
+#  from training.callbacks.callback_extns import TFRunMetaData
+#  from training.callbacks.callback_extns import (WeightWriter,
+#                                                 ValidationOutput)
+
+  tensorboard_dir = join(output_dir, "logs", modelname)
+  logger.info("tensorboard logs writing to '%s'" % tensorboard_dir)
+
+  checkpoint_filepath=join(output_dir, modelname + ".hdf5")
+  logger.info("writing checkpoint file to '%s'" % checkpoint_filepath)
+
+#  weight_dir = join(output_dir, modelname, "weights")
+#  logger.info("weightwriter writing to '%s'" % weight_dir)
+
+#  validation_dir = join(output_dir, model_name, "validation")
+#  logger.info("validation data writing to '%s'" % validation_dir)
+
+  for dir in [output_dir, tensorboard_dir]:
+    try:
+      makedirs(dir)
+    except FileExistsError:
+      logger.warning("'%s' already exists" % dir)
+      continue
+    except OSError:
+      logger.exception("creating '%s' failed with OSError" % dir)
+      continue
+
+  tensorboard_callback = TensorBoardCallback(
+      log_dir=tensorboard_dir,
+      histogram_freq=0,
+      batch_size=1,
+      write_graph=True,
+      write_grads=False,
+      write_images=False,
+      embeddings_freq=0,
+      embeddings_layer_names=None,
+      embeddings_metadata=None)
+
+  tensorboard_callback.set_model(model)
+
+  return [
+      tensorboard_callback,
+
+      ModelCheckpointCallback(
+          filepath=checkpoint_filepath,
+          verbose=0,
+          save_best_only=True
+      ),
+
+      EarlyStoppingCallback(
+          monitor="val_loss",
+          min_delta=0.00000001,
+          patience=25,
+          mode="min"
+      ),
+
+      LearningRateScheduler(step_decay(20, 0.5))
+
+      #ReduceLROnPlateauCallback(
+      #    monitor="val_loss",
+      #    factor=0.5,
+      #    patience=4,
+      #    mode="min",
+      #    epsilon=0.01,
+      #    min_lr=0.0000001
+      #),
+
+      #TFRunMetaData(tensorboard_callback),
+
+      #WeightWriter(weight_dir),
+
+      #ValidationOutput(
+      #    validation_dir,
+      #    kwargs["validation_generator"],
+      #    kwargs["validation_steps"]
+      #)
+  ]
+
+
+def preprocess_image(filename):
   """
   this should be merged with the training generator
   so we replicate the image input pipeline
@@ -130,8 +234,8 @@ def process_image(filename):
   x = resize(x, (256,256), anti_aliasing=True)
   return x
 
-def process_label(filename):
-  y = process_image(filename)
+def preprocess_label(filename):
+  y = preprocess_image(filename)
   # flatten the label
   y[y > 0] = 1
 
@@ -146,7 +250,11 @@ def process_label(filename):
 #    i_y[i_y != 0] = 255
   return y[..., np.newaxis]
 
-def write_label_image(stub, id, name, image, mask):
+
+def write_labelled_image(stub, id, name, image, mask):
+  """
+  combine the image and label horizontally and write to disk
+  """
   from skimage.io import imread, imsave
 
   return
@@ -158,7 +266,30 @@ def write_label_image(stub, id, name, image, mask):
   logger.info("out: '%s' %f -> %f" % (str(out.shape), out.min(), out.max()))
   imsave("%s/%04i-%s" % (stub, id, name), (out*255.0).astype(np.uint8))
 
-def image_from_filenames_generator(Xs, ys, shuffle_data=False):
+
+def image_from_filenames_generator(
+        Xs,
+        ys,
+        image_preprocess_fn=None,
+        label_preprocess_fn=None,
+        shuffle_data=False,
+        debug_output_path=None):
+  """
+  build a generator to yield images from filenames
+
+  Xs: list of image filenames
+  ys: aligned list of outputs
+  image_preprocess_fn: preprocessing function to x in Xs, f(str) -> np.matrix
+  label_preprocess_fn: preprocessing function to y in ys, f(str) -> np.matrix
+  shuffle_data: shuffle the input lists on each epoch if true
+  debug_output_path: absolute path to write the yielded images for debugging
+  """
+  if image_preprocess_fn is None:
+    image_preprocess_fn = lambda x: x
+
+  if label_preprocess_fn is None:
+    label_preprocess_fn = lambda x: x
+
   def gen():
     from skimage.transform import resize
     from skimage.io import imread, imsave
@@ -174,21 +305,49 @@ def image_from_filenames_generator(Xs, ys, shuffle_data=False):
 
       epoch_idx = epoch_idx + 1
       for X, y in zip(Xs_, ys_):
-        i_x = process_image(X).astype(np.float)
-        i_y = process_label(y).astype(np.float)
-        write_label_image("/out/augs/val", epoch_idx, basename(X), i_x, i_y)
+        i_x = image_preprocess_fn(X).astype(np.float)
+        i_y = label_preprocess_fn(y).astype(np.float)
+
+        if debug_output_path is not None:
+          write_label_image(debug_output_path, epoch_idx, basename(X), i_x, i_y)
 
         yield i_x[np.newaxis, ...], i_y[np.newaxis, ...]
   return gen
 
 
-def image_from_filenames_generator_with_augmentation(Xs, ys, shuffle_data=False, num_augs=5):
+def image_from_filenames_generator_with_augmentation(
+        Xs,
+        ys,
+        image_preprocess_fn=None,
+        label_preprocess_fn=None,
+        shuffle_data=False,
+        debug_output_path=None,
+        num_augs=5):
   """
-  read images from disk with masks
-  augment the images as we read them with random augmentation pipelines
+  build a generator to yield augmented images from filenames
+  uses imgaug to perform augmentations, which depends on opencv
+  https://imgaug.readthedocs.io/
+
+  Xs: list of image filenames
+  ys: aligned list of outputs
+  image_preprocess_fn: preprocessing function to x in Xs, f(str) -> np.matrix
+  label_preprocess_fn: preprocessing function to y in ys, f(str) -> np.matrix
+  shuffle_data: shuffle the input lists on each epoch if true
+  num_augs: number of augmentations to perform, higher numbers are more aggressive
+  debug_output_path: absolute path to write the yielded images for debugging
+
+  TODO:
+    + really need to migrate to the latest imgaug, but causes numpy conflict with old tf/keras
+    + test image augmentation output scalings (imgaug requires 0..255 range, but NN wants 0..1 so some complexities)
   """
   import imgaug as ia
   import imgaug.augmenters as iaa
+
+  if image_preprocess_fn is None:
+    image_preprocess_fn = lambda x: x
+
+  if label_preprocess_fn is None:
+    label_preprocess_fn = lambda x: x
 
   # Define our augmentation pipeline.
   sometimes = lambda aug: iaa.Sometimes(0.5, aug)
@@ -286,9 +445,11 @@ def image_from_filenames_generator_with_augmentation(Xs, ys, shuffle_data=False,
       epoch_idx = epoch_idx + 1
 
       for X, y in zip(Xs_, ys_):
-        i_x = process_image(X)
-        i_y = process_label(y)
-        write_label_image("/out/augs/trn", epoch_idx, basename(X), i_x, i_y)
+        i_x = image_preprocess_fn(X)
+        i_y = label_preprocess_fn(y)
+
+        if debug_output_path is not None:
+          write_label_image(debug_output_path, epoch_idx, basename(X), i_x, i_y)
 
         yield i_x[np.newaxis, ...], i_y[np.newaxis, ...]
 
@@ -301,8 +462,11 @@ def image_from_filenames_generator_with_augmentation(Xs, ys, shuffle_data=False,
           mask_aug_i = det.augment_image(i_y_aug)
           mask_aug_i = mask_aug_i.mean(axis=-1)[..., np.newaxis]
           mask_aug_i = (mask_aug_i > mask_aug_i.mean()).astype(np.uint8) * 255
-#          imsave("/out/augs/trn/%s_%05i_%03i_i.png" % (basename(X), idx, aug_id), image_aug_i)
-#          imsave("/out/augs/trn/%s_%05i_%03i_m.png" % (basename(y), idx, aug_id), mask_aug_i)
+
+          if debug_output_path is not None:
+            write_label_image(debug_output_path, epoch_idx,
+                "%s-aug-%04i" % (basename(X), aug_id), i_x, i_y)
+
           yield (image_aug_i[np.newaxis, ...].astype(np.float) / 255.0,
                  mask_aug_i[np.newaxis, ...].astype(np.float) / 255.0)
 
@@ -313,6 +477,9 @@ def train_model(
     modelname,
     model_builder_fn,
     model_compiler_fn,
+    image_preprocess_fn,
+    label_preprocess_fn,
+    callback_creator_fn,
     images,
     masks,
     batch_size,
@@ -320,26 +487,33 @@ def train_model(
     num_epochs,
     learning_rate,
     shuffle_data,
-    output_dir="models"):
-  """train a simple model which just generates a mask
+  ):
   """
-  from keras.callbacks import (TensorBoard as TensorBoardCallback,
-                               ModelCheckpoint as ModelCheckpointCallback,
-                               ReduceLROnPlateau as ReduceLROnPlateauCallback,
-                               EarlyStopping as EarlyStoppingCallback,
-                               LearningRateScheduler)
+  train a simple model which just generates a mask
 
-  # OUTPUT
-  try:
-    makedirs(output_dir)
-  except OSError:
-    pass
+  modelname: name of the model which is used to create directories for storage
+  model_build_fn: function which returns the model architecture to train
+  model_compiler_fn: function which compiles the model with optimizer, cost functions, metrics, etc
+  image_preprocess_fn: function which turns Xs into data for training/validation
+  label_preprocess_fn: function which turns ys into data for training/validation
+  images: list of filenames for training data (Xs)
+  masks: list of filenames for label data (ys)
+  batch_size: batch size for training (fixed at 1 for the moment)
+  num_augs: number of augmentations to apply to the training data (not applied to validation)
+  num_epochs: maximum number of epochs for which to train the model
+  learning_rate: learning rate for the model optimizer
+  shuffle_data: shuffle the data each epoch if true
 
-  model_filename = join(output_dir, modelname + ".hdf5")
-
+  TODO: bit of an abstraction issue: we called image_preprocess_fn and label_preprocess_fn
+        as if they apply to images, but they are actually responsible for loading the images.
+        The same pipeline could be used to train non-image data by passing different functions
+        to these positions (loading sounds, text files, etc). Not sure if other abstractions
+        would hold under that change.
+  """
   # MODEL
   model = model_builder_fn()
   model_compiler_fn(model)
+  callbacks = callback_creator_fn(model)
 
   # DATA
   from sklearn.model_selection import train_test_split
@@ -351,27 +525,28 @@ def train_model(
 
   logger.info("%i training steps, %i validation steps", training_steps, validation_steps)
 
-  # CALLBACKS
-  callbacks = [
-    ModelCheckpointCallback(
-        filepath=model_filename,
-        verbose=0,
-        save_best_only=True
-    ),
-#    EarlyStoppingCallback(
-#        monitor="val_loss",
-#        min_delta=0.00000001,
-#        patience=20,
-#        mode="min"
-#    ),
-    LearningRateScheduler(step_decay(20, 0.5))
-  ]
+  training_generator = image_from_filenames_generator_with_augmentation(
+      train_x,
+      train_y,
+      image_preprocess_fn=image_preprocess_fn,
+      label_preprocess_fn=label_preprocess_fn,
+      shuffle_data=shuffle_data,
+      num_augs=num_augs
+  )()
+
+  validation_generator = image_from_filenames_generator(
+      test_x,
+      test_y,
+      image_preprocess_fn=image_preprocess_fn,
+      label_preprocess_fn=label_preprocess_fn,
+      shuffle_data=shuffle_data
+  )()
 
   # TRAIN
-  model.fit_generator(image_from_filenames_generator_with_augmentation(train_x, train_y, shuffle_data=shuffle_data, num_augs=num_augs)(),
+  model.fit_generator(training_generator,
                       steps_per_epoch=training_steps*(1+num_augs),
                       epochs=num_epochs,
-                      validation_data = image_from_filenames_generator(test_x, test_y, shuffle_data=shuffle_data)(),
+                      validation_data = validation_generator,
                       validation_steps = validation_steps,
                       #validation_data=validation_data,
                       callbacks=callbacks,
@@ -381,8 +556,9 @@ def train_model(
                       use_multiprocessing=False)
 
   # FIXME: can we ditch this? the checkpoint should handle all this for us
-  logger.info("saving model to '%s'" % model_filename)
-  model.save(model_filename)
+#  model_filename = join(output_dir, modelname + ".hdf5")
+#  logger.info("saving model to '%s'" % model_filename)
+#  model.save(model_filename)
 
 
 def get_argument_parser():
@@ -447,6 +623,14 @@ def parse_arguments(parser):
 
 
 if __name__ == "__main__":
+  """
+  train a model from the command line
+
+  output_dir: absolute path to the base directory for writing models and training info;
+              model is written to <output_dir>/<modelname>.hdf5
+              tensorboard logs are under <output_dir>/logs/<modelname> (point tensorboard at <output_dir>/logs/ to compare all models)
+              other training outputs are written under <output_dir>/<modelname>/
+  """
   import sys
   import os
   from os.path import exists
@@ -467,13 +651,13 @@ if __name__ == "__main__":
   images = sorted(glob(args.images))
   masks = sorted(glob(args.masks))
 
-  logging.info("found %i/%i images/masks" % (len(images), len(masks)))
+  logger.info("found %i/%i images/masks" % (len(images), len(masks)))
   assert len(images) > 0
 
   # get the intersection of the images and masks so we only get images with masks and vv
   images = [f for f in images if basename(f) in [basename(m) for m in masks]]
   masks  = [m for m in masks  if basename(m) in [basename(f) for f in images]]
-  logging.info("found %i/%i overlapping images/masks" % (len(images), len(masks)))
+  logger.info("found %i/%i overlapping images/masks" % (len(images), len(masks)))
   assert len(images) > 0
   assert len(images) == len(masks)
 
@@ -485,16 +669,21 @@ if __name__ == "__main__":
   #config.gpu_options.allow_growth = True
   #K.set_session(tf.Session(config=config))
 
+  model_builder = lambda: model_builder_fn(model_type=args.modeltype, image_shape=tuple(args.image_shape), channel_count=3, network_depth=args.network_depth)
+  model_compile = lambda model: model_compiler_fn(model, optimizer_name=args.optimizer, loss_fn_name=args.loss_function, metric_names=args.training_metrics, learning_rate=args.learning_rate)
+
   train_model(
       modelname=args.modelname,
-      model_builder_fn=lambda: model_builder_fn(image_shape=tuple(args.image_shape), channel_count=3, network_depth=args.network_depth),
-      model_compiler_fn=lambda x: model_compiler_fn(x, optimizer_name=args.optimizer, loss_fn_name=args.loss_function, metric_names=args.training_metrics, learning_rate=args.learning_rate),
+      model_builder_fn=model_builder,
+      model_compiler_fn=model_compile,
+      image_preprocess_fn=lambda x: preprocess_image(x),
+      label_preprocess_fn=lambda x: preprocess_label(x),
+      callback_creator_fn=lambda x: keras_callbacks_fn(x, args.modelname, args.output_path),
       images=images,
       masks=masks,
       batch_size=args.batch_size,
       num_augs=args.num_augs,
       num_epochs=args.num_epochs,
       shuffle_data=args.shuffle_data,
-      learning_rate=args.learning_rate,
-      output_dir=args.output_path
+      learning_rate=args.learning_rate
   )
