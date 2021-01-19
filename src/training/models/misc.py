@@ -1,16 +1,19 @@
 import numpy as np
-from keras import layers
-from keras.layers import Input, Activation, Convolution3D, MaxPooling3D, UpSampling3D
-from keras.layers import Conv3DTranspose
-from keras.layers import Convolution2D, AveragePooling2D, MaxPooling2D, Conv2DTranspose, UpSampling2D
-from keras.layers import Dropout
-from keras.models import Model
-
-from keras.applications.vgg16 import VGG16
 
 import tensorflow as tf
 
-from keras import backend as K
+from tensorflow.keras.layers import (Input, Activation,
+                                     Convolution2D, AveragePooling2D, MaxPooling2D,
+                                     UpSampling2D, Conv2DTranspose,
+                                     Convolution3D, MaxPooling3D,
+                                     UpSampling3D, Conv3DTranspose,
+                                     Dropout)
+
+from tensorflow.keras.models import Model
+
+from tensorflow.keras.applications.vgg16 import VGG16
+
+from tensorflow.keras import backend as K
 
 def get_model_memory_usage (batch_size, model):
   """estimate the memory usage of the model.
@@ -23,11 +26,15 @@ def get_model_memory_usage (batch_size, model):
   for l in model.layers:
     single_layer_mem = 1
 
-    for s in l.output_shape:
-      if s is None:
+    layer_output_shape = l.output_shape if isinstance(l.output_shape, list) else [l.output_shape]
+
+    for shape in [x for x in layer_output_shape if x is not None]:
+      if shape is None:
         continue
-      single_layer_mem *= s
-      shapes_mem_count += single_layer_mem
+
+      for dim in [x for x in shape if x is not None]:
+        single_layer_mem *= dim
+        shapes_mem_count += single_layer_mem
 
   # FIXME: these used to be set() of model.trainable_weights, but had to be removed
   #        because of a tensorflow error since tensorflow 2.0, check the issues at some point

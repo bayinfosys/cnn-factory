@@ -6,10 +6,11 @@ https://lars76.github.io/neural-networks/object-detection/losses-for-segmentatio
 https://stats.stackexchange.com/questions/273537/f1-dice-score-vs-iou/276144#276144
 """
 
-from keras import backend as K
-from keras.losses import binary_crossentropy
-
 import tensorflow as tf
+
+from tensorflow.keras import backend as K
+from tensorflow.keras.losses import binary_crossentropy
+
 
 def dice_coef(y_true, y_pred):
   """compute the dice coefficient of two classifications

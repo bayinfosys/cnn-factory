@@ -1,8 +1,7 @@
 import tensorflow as tf
-from keras.layers import Dense
-from keras.layers import Convolution2D
-from keras.layers import GlobalMaxPooling2D
-from keras.models import Model
+
+from tensorflow.keras.layers import (Dense, Convolution2D, GlobalMaxPooling2D)
+from tensorflow.keras.models import Model
 
 from .unet import UNet
 

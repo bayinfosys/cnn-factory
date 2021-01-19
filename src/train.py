@@ -1,12 +1,13 @@
+import os
 import sys
 import logging
 
 from os.path import join, basename
 
-from keras import backend as K
-
-#from keras.backend.tensorflow_backend import set_session
 import tensorflow as tf
+
+from tensorflow.keras import backend as K
+
 import numpy as np
 
 from common.loss import (dice_coef,
@@ -71,7 +72,7 @@ def model_compiler_fn(
   """
   compile the model with an optimizer and loss function
   """
-  import keras
+  import tensorflow.keras as keras
 
   logger.info("compiling model with: '%s', '%s', '%s', %f" % (
       optimizer_name, loss_fn_name, str(metric_names), learning_rate))
@@ -130,10 +131,10 @@ def keras_callbacks_fn(
   """
   from os import makedirs
 
-  from keras.callbacks import (TensorBoard as TensorBoardCallback,
-                               ModelCheckpoint as ModelCheckpointCallback,
-                               EarlyStopping as EarlyStoppingCallback,
-                               LearningRateScheduler)
+  from tensorflow.keras.callbacks import (TensorBoard as TensorBoardCallback,
+                                          ModelCheckpoint as ModelCheckpointCallback,
+                                          EarlyStopping as EarlyStoppingCallback,
+                                          LearningRateScheduler)
 #  from training.callbacks.callback_extns import TFRunMetaData
 #  from training.callbacks.callback_extns import (WeightWriter,
 #                                                 ValidationOutput)
@@ -163,7 +164,6 @@ def keras_callbacks_fn(
   tensorboard_callback = TensorBoardCallback(
       log_dir=tensorboard_dir,
       histogram_freq=0,
-      batch_size=1,
       write_graph=True,
       write_grads=False,
       write_images=False,
@@ -543,17 +543,17 @@ def train_model(
   )()
 
   # TRAIN
-  model.fit_generator(training_generator,
-                      steps_per_epoch=training_steps*(1+num_augs),
-                      epochs=num_epochs,
-                      validation_data = validation_generator,
-                      validation_steps = validation_steps,
-                      #validation_data=validation_data,
-                      callbacks=callbacks,
-                      #verbose=verbosity,
-                      max_queue_size=1,
-                      workers=1,
-                      use_multiprocessing=False)
+  model.fit(training_generator,
+            steps_per_epoch=training_steps*(1+num_augs),
+            epochs=num_epochs,
+            validation_data = validation_generator,
+            validation_steps = validation_steps,
+            #validation_data=validation_data,
+            callbacks=callbacks,
+            #verbose=verbosity,
+            max_queue_size=1,
+            workers=1,
+            use_multiprocessing=False)
 
   # FIXME: can we ditch this? the checkpoint should handle all this for us
 #  model_filename = join(output_dir, modelname + ".hdf5")
@@ -636,12 +636,14 @@ if __name__ == "__main__":
   from os.path import exists
   from glob import glob
 
+  log_format = "[%(asctime)s] - %(name)s:%(lineno)d - %(levelname)s - %(message)s"
+
   root = logging.getLogger()
   root.setLevel(logging.DEBUG)
+  root.setLevel(os.getenv("LOG_LEVEL", "DEBUG"))
 
   ch = logging.StreamHandler(sys.stdout)
-  ch.setLevel(logging.DEBUG)
-  formatter = logging.Formatter("%(name)s:%(levelname)s:%(message)s")
+  formatter = logging.Formatter(log_format)
   ch.setFormatter(formatter)
   root.addHandler(ch)
 
@@ -654,9 +656,15 @@ if __name__ == "__main__":
   logger.info("found %i/%i images/masks" % (len(images), len(masks)))
   assert len(images) > 0
 
-  # get the intersection of the images and masks so we only get images with masks and vv
-  images = [f for f in images if basename(f) in [basename(m) for m in masks]]
-  masks  = [m for m in masks  if basename(m) in [basename(f) for f in images]]
+  # get the intersection of the images and masks so we only get images with masks and vice-versa
+  # FIXME: if we have a dir wildcard in the search (imgs/*/*.png) basename will not give the correct results
+
+  image_basenames = set([basename(f) for f in images])
+  mask_basenames = set([basename(m) for m in masks])
+
+  images = [f for f, b in zip(images, image_basenames) if b in mask_basenames]
+  masks  = [m for m, b in zip(masks, mask_basenames)  if b in image_basenames]
+
   logger.info("found %i/%i overlapping images/masks" % (len(images), len(masks)))
   assert len(images) > 0
   assert len(images) == len(masks)

@@ -1,4 +1,4 @@
-ARG BASE=tensorflow/tensorflow:1.7.0-gpu-py3
+ARG BASE=tensorflow/tensorflow:2.2.2-gpu-py3
 FROM $BASE
 
 RUN apt-get update && \

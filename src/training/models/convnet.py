@@ -1,12 +1,15 @@
 import numpy as np
-from keras import layers
-from keras.layers import Input, Activation
-from keras.layers import Convolution2D, AveragePooling2D, MaxPooling2D, Conv2DTranspose, UpSampling2D
-from keras.layers import concatenate
-#from keras.layers import Dropout
-from keras.models import Model
 
 import tensorflow as tf
+
+from tensorflow.keras.layers import (Input, Activation,
+                                     Convolution2D,
+                                     AveragePooling2D, MaxPooling2D,
+                                     Conv2DTranspose, UpSampling2D,
+                                     concatenate)
+
+from tensorflow.keras.models import Model
+
 
 class ConvNet ():
   """constructor class for a convolutional neural network

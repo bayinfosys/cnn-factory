@@ -1,14 +1,16 @@
 import numpy as np
-from keras import layers
-from keras.layers import Input, Activation
-from keras.layers import Convolution2D, AveragePooling2D, MaxPooling2D, Conv2DTranspose, UpSampling2D
-from keras.layers import GlobalAveragePooling2D
-#from keras.layers import Dropout
-from keras.models import Model
+
+from tensorflow.keras.layers import (Input, Activation,
+                                     Convolution2D,
+                                     AveragePooling2D, MaxPooling2D,
+                                     Conv2DTranspose, UpSampling2D,
+                                     GlobalAveragePooling2D,
+                                     Dropout)
+
+from tensorflow.keras.models import Model
 
 from .convnet import ConvNet
 
-import tensorflow as tf
 
 class ConvNetWithLabels ():
   def __init__ (self, image_shape, network_depth = 3, label_definitions = []):

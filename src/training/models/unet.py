@@ -1,11 +1,14 @@
-from keras import layers
-from keras.layers import Input, Activation
-from keras.layers import Convolution3D, MaxPooling3D, UpSampling3D, Conv3DTranspose
-from keras.layers import Convolution2D, MaxPooling2D, Conv2DTranspose, UpSampling2D
-
-from keras.models import Model
-
 import tensorflow as tf
+
+from tensorflow.keras.layers import (Input, Activation,
+                                     Convolution3D,
+                                     MaxPooling3D, UpSampling3D, Conv3DTranspose,
+                                     Convolution2D,
+                                     MaxPooling2D, Conv2DTranspose, UpSampling2D,
+                                     concatenate)
+
+from tensorflow.keras.models import Model
+
 
 def bounce_index(start, end):
   """recursive generator to create a set of up and down
@@ -51,13 +54,13 @@ class UNet():
           "conv_fn" : Convolution2D,
           "pool_fn" : MaxPooling2D,
           "trns_fn" : UpSampling2D, #Conv2DTranspose
-          "link_fn" : layers.concatenate}
+          "link_fn" : concatenate}
     elif len(self.image_shape) == 3:
       return {
           "conv_fn" : Convolution3D,
           "pool_fn" : MaxPooling3D,
           "trns_fn" : UpSampling3D, #Conv3DTranspose,
-          "link_fn" : layers.concatenate}
+          "link_fn" : concatenate}
     return {}
 
   @staticmethod
@@ -109,7 +112,7 @@ class UNet():
         deconv = function_context["trns_fn"](pool_size)(layer_stack.pop())
       elif function_context["trns_fn"] is Conv2DTranspose or function_context["trns_fn"] is Conv3DTranspose:
         deconv = function_context["trns_fn"](filter_size, stride_size=pool_size)(layer_stack.pop())
-#      A = layers.concatenate([deconv, layer_stack.pop()], axis=cat_axis)
+#      A = concatenate([deconv, layer_stack.pop()], axis=cat_axis)
       A = function_context["link_fn"]([deconv, layer_stack.pop()])
       A = function_context["conv_fn"](filter_size, conv_size, activation="relu", padding="same")(A)
       A = function_context["conv_fn"](filter_size, conv_size, activation="relu", padding="same")(A)
@@ -196,7 +199,7 @@ class UNet():
     x = function_context["pool_fn"](pool_size=pool_size)(input)
     x = function_context["conv_fn"](32, conv_size, activation="relu", padding="same")(x)
     x = function_context["conv_fn"](32, conv_size, activation="relu", padding="same")(x)
-    x = layers.UpSampling2D(size=pool_size)(x)
+    x = UpSampling2D(size=pool_size)(x)
 
   #  x = layers.add([input, x])
     x = function_context["link_fn"]([input, x])
