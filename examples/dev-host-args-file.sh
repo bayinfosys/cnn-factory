@@ -26,4 +26,4 @@ docker run \
   -v $(pwd)/output:/out \
   -u $(id -u):$(id -g) \
   -e ARGS_FILE=/args/train.args.run.01 \
-  anax32/cnn-factory
+  bayis/cnn-factory
