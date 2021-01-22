@@ -22,7 +22,7 @@ from generators import create_image_from_filenames_generator
 
 from training.args import get_argument_parser, parse_arguments
 from training.callbacks import create_keras_callbacks
-from training.builder import default_model_builder, MODEL_BUILDERS
+from training.model_builder import default_model_builder, MODEL_BUILDERS
 
 
 logger = logging.getLogger(__name__)
