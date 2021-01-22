@@ -1,4 +1,8 @@
+import logging
+
 from .models import get_model_memory_usage, ConvNet, UNet
+
+logger = logging.getLogger(__name__)
 
 
 MODEL_BUILDERS = {
