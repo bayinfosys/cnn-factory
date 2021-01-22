@@ -1,3 +1,5 @@
+import logging
+
 import tensorflow as tf
 
 from tensorflow.keras.layers import (Input, Activation,
@@ -10,18 +12,8 @@ from tensorflow.keras.layers import (Input, Activation,
 from tensorflow.keras.models import Model
 
 
-def bounce_index(start, end):
-  """recursive generator to create a set of up and down
-  indices from a given range,
-  not including the end index
-  i.e, start=0, end=5 generates [0,1,2,3,4,3,2,1,0],
-  start=4, end=10, generates [4,5,6,7,8,9,8,7,6,5,4]"""
-  yield start
-  if start < end-1:
-    for i in bounce_index(start+1, end):
-      yield i
-  if start < end-1:   # prevents the last element appearing twice
-    yield start
+logger = logging.getLogger(__name__)
+
 
 class UNet():
   """class to construct a Unet given an input shape and depth"""
@@ -48,7 +40,7 @@ class UNet():
     else:
       self.filter_sizes = filter_sizes
 
-  def get_function_context(self):
+  def _get_function_context(self):
     if len(self.image_shape) == 2:
       return {
           "conv_fn" : Convolution2D,
@@ -92,22 +84,19 @@ class UNet():
     cat_axis = len(image_shape) + 1
     sigmoid_conv_size = (1, ) * len(image_shape)
 
-    print("building '%s': %i, %i" % (layer_name, position, depth))
+    logger.info("building '%s': %i, %i" % (layer_name, position, depth))
 
     if position < depth: # down
-      print("  down")
       A = function_context["conv_fn"](filter_size, conv_size, activation="relu", padding="same")(layer_stack.pop())
       A = function_context["conv_fn"](filter_size, conv_size, activation="relu", padding="same")(A)
       B = function_context["pool_fn"](pool_size=pool_size, padding="same")(A)
       layer_stack.append(A)
       layer_stack.append(B)
     if position == depth: # apex
-      print("  nadir")
       A = function_context["conv_fn"](filter_size, conv_size, activation="relu", padding="same")(layer_stack.pop())
       A = function_context["conv_fn"](filter_size, conv_size, activation="relu", padding="same", name="nadir")(A)
       layer_stack.append(A)
     if position > depth: # back up
-      print("  up")
       if function_context["trns_fn"] is UpSampling2D or function_context["trns_fn"] is UpSampling3D:
         deconv = function_context["trns_fn"](pool_size)(layer_stack.pop())
       elif function_context["trns_fn"] is Conv2DTranspose or function_context["trns_fn"] is Conv3DTranspose:
@@ -137,10 +126,9 @@ class UNet():
     cat_axis = len(image_shape) + 1
     sigmoid_conv_size = (1, ) * len(image_shape)
 
-    print("building '%s': %i, %i" % (layer_name, position, depth))
+    logger.info("building '%s': %i, %i" % (layer_name, position, depth))
 
     if position < depth: # down
-      print("  down")
       with tf.name_scope(layer_name):
         A = function_context["conv_fn"](32, (1, 1), activation="relu", padding="same")(layer_stack.pop())
         A = function_context["conv_fn"](filter_size, conv_size, activation="relu", padding="same")(A)
@@ -149,7 +137,6 @@ class UNet():
         layer_stack.append(A)
         layer_stack.append(B)
     if position == depth: # apex
-      print("  nadir")
       with tf.name_scope(layer_name):
         A = function_context["conv_fn"](32, (1, 1), activation="relu", padding="same")(layer_stack.pop())
         A = function_context["conv_fn"](filter_size, conv_size, activation="relu", padding="same")(A)
@@ -164,7 +151,6 @@ class UNet():
         A = function_context["conv_fn"](filter_size, conv_size, activation="relu", padding="same", name="nadir")(A)
         layer_stack.append(A)
     if position > depth: # back up
-      print("  up")
       A = function_context["conv_fn"](32, (1, 1), activation="relu", padding="same")(layer_stack.pop())
       if function_context["trns_fn"] is UpSampling2D or function_context["trns_fn"] is UpSampling3D:
         deconv = function_context["trns_fn"](pool_size)(A)
@@ -194,7 +180,7 @@ class UNet():
     conv_size = (3, ) * len(image_shape)
     pool_size = (2 **(position), ) * len(image_shape)
 
-    print("%s: %s" % (layer_name, str(pool_size)))
+    logger.info("%s: %s" % (layer_name, str(pool_size)))
 
     x = function_context["pool_fn"](pool_size=pool_size)(input)
     x = function_context["conv_fn"](32, conv_size, activation="relu", padding="same")(x)
@@ -211,34 +197,14 @@ class UNet():
     """constructs a keras model representing this unet"""
     sigmoid_conv_size = (1, ) * len(self.image_shape)
 
-    function_context = self.get_function_context()
+    function_context = self._get_function_context()
 
     layer_stack = []
 
-    print("UNET [%i] : %s" %(len(self.filter_sizes), str(self.filter_sizes)))
+    logger.info("UNET [%i] : %s" % (len(self.filter_sizes), str(self.filter_sizes)))
 
     inputs = Input(self.image_shape + (self.channel_count, ))
     layer_stack.append(inputs)
-
-  #    for i, idx in enumerate(bounce_index(0, len(self.filter_sizes))):
-  #  #    if i<network_u_depth:
-  #  #      dev = tf.device("/gpu:0")
-  #  #    else:
-  #  #      dev = tf.device("/gpu:1")
-  #      dev = tf.device("/gpu:0")
-  #
-  #      with dev:
-  #        name = "auto_layer_%i_%d" %(i, self.filter_sizes[idx])
-  #        self.layer_builder(
-  #          name,
-  #          self.image_shape,
-  #          self.filter_sizes[idx],
-  #          layer_stack, self.depth-1, i, function_context)
-  #
-  #      # record the name of the layer at the bottom of the unet,
-  #      # which corresponds to the encoder element
-  #      if i == self.depth-1:
-  #        self.encoder_output_name = "nadir" #layer_stack[-1].name
 
     # encoder
     for i, filter_size in enumerate(self.filter_sizes):
@@ -253,7 +219,7 @@ class UNet():
           function_context)
 
       if i == self.depth-1:
-        self.encoder_output_name = "nadir" #layer_stack[-1].name
+        self.encoder_output_name = "nadir"
 
     outputs = []
 
@@ -275,10 +241,10 @@ class UNet():
       # FIXME: define this as a decoder output the same way we do labels?
       outputs += [function_context["conv_fn"](1, sigmoid_conv_size, activation="sigmoid", name=output_name)(local_layer_stack.pop())]
 
-    print("layer_stack_length : %i" % len(local_layer_stack))
+    logger.info("layer_stack_length : %i" % len(local_layer_stack))
     assert(len(local_layer_stack) == 0) # ensure stack is exhausted
 
-    print("num outputs : %i" % len(outputs))
+    logger.info("num outputs : %i" % len(outputs))
 
     model = Model(inputs=[inputs], outputs=outputs)
     return model
