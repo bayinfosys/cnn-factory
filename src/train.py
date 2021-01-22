@@ -32,7 +32,7 @@ logging.getLogger("PIL").setLevel(logging.WARNING)
 logging.getLogger("matplotlib").setLevel(logging.WARNING)
 
 
-def model_compiler_fn(
+def default_model_compiler(
         model,
         optimizer_name,
         loss_fn_name,
@@ -271,7 +271,7 @@ if __name__ == "__main__":
 
   # TRAIN
   model.fit(training_generator,
-            steps_per_epoch=training_steps*(1+num_augs),
+            steps_per_epoch=training_steps*(1+args.num_augs),
             epochs=args.num_epochs,
             validation_data = validation_generator,
             validation_steps = validation_steps,
