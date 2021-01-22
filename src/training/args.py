@@ -69,7 +69,7 @@ def parse_arguments(parser):
     # NOTE: FileNotFoundError intentionally causes termination
     with open(os.environ["ARGS_FILE"], "r") as f:
       arguments = json.load(f)
-  else
+  else:
     logger.info("parsing commandline")
     arguments = sys.argv
 
