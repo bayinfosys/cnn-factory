@@ -18,7 +18,7 @@ from common.loss import (dice_coef,
 
 from common.schedulers import step_decay
 
-from generators import create_image_from_filenames_generator
+from generators import create_image_from_filenames_generator, create_image_augmentation_fn
 
 from training.args import get_argument_parser, parse_arguments
 from training.callbacks import create_keras_callbacks
@@ -191,6 +191,9 @@ if __name__ == "__main__":
   from sklearn.model_selection import train_test_split
   train_x, test_x, train_y, test_y = train_test_split(images, masks, test_size=0.3)
 
+  # FIXME: get the name of the augmentation function from args
+  augmentation_fn = create_image_augmentation_fn(args.num_augs)
+
   # TRAINING STEPS
   # FIXME: run through the data to remove invalid data from the counts
   training_steps = len(train_x) // args.batch_size
@@ -206,8 +209,7 @@ if __name__ == "__main__":
       image_validation_fn=lambda x: data_validation_fn(x, tuple(args.image_shape) + (3,)),
       label_validation_fn=lambda x: label_validation_fn(x, tuple(args.image_shape) + (1,)),
       shuffle_data=args.shuffle_data,
-      # augmentation_fn=default_augmentation,
-      # num_args = args.num_augs
+      augmentation_fn=augmentation_fn,
   )()
 
   validation_generator = create_image_from_filenames_generator(
@@ -217,7 +219,7 @@ if __name__ == "__main__":
       label_preprocess_fn=label_preprocess_fn,
       image_validation_fn=lambda x: data_validation_fn(x, tuple(args.image_shape) + (3,)),
       label_validation_fn=lambda x: label_validation_fn(x, tuple(args.image_shape) + (1,)),
-      shuffle_data=args.shuffle_data,
+      shuffle_data=args.shuffle_data
   )()
 
   # TRAIN
