@@ -84,17 +84,32 @@ class UNet():
     cat_axis = len(image_shape) + 1
     sigmoid_conv_size = (1, ) * len(image_shape)
 
-    logger.info("building '%s': %i, %i" % (layer_name, position, depth))
+    conv_params = {
+        "filters": filter_size,
+        "kernel_size": conv_size,
+        "activation": "relu",
+        "padding": "same"
+    }
+
+    pool_params = {
+        "pool_size": pool_size,
+        "padding": "same"
+    }
 
     if position < depth: # down
-      A = function_context["conv_fn"](filter_size, conv_size, activation="relu", padding="same")(layer_stack.pop())
-      A = function_context["conv_fn"](filter_size, conv_size, activation="relu", padding="same")(A)
-      B = function_context["pool_fn"](pool_size=pool_size, padding="same")(A)
+      A = function_context["conv_fn"](**conv_params)(layer_stack.pop())
+      logger.debug(str(A))
+      A = function_context["conv_fn"](**conv_params)(A)
+      logger.debug(str(A))
+      B = function_context["pool_fn"](**pool_params)(A)
+      logger.debug(str(B))
       layer_stack.append(A)
       layer_stack.append(B)
     if position == depth: # apex
-      A = function_context["conv_fn"](filter_size, conv_size, activation="relu", padding="same")(layer_stack.pop())
-      A = function_context["conv_fn"](filter_size, conv_size, activation="relu", padding="same", name="nadir")(A)
+      A = function_context["conv_fn"](**conv_params)(layer_stack.pop())
+      logger.debug(str(A))
+      A = function_context["conv_fn"](**conv_params, name="nadir")(A)
+      logger.debug(str(A))
       layer_stack.append(A)
     if position > depth: # back up
       if function_context["trns_fn"] is UpSampling2D or function_context["trns_fn"] is UpSampling3D:
@@ -102,9 +117,13 @@ class UNet():
       elif function_context["trns_fn"] is Conv2DTranspose or function_context["trns_fn"] is Conv3DTranspose:
         deconv = function_context["trns_fn"](filter_size, stride_size=pool_size)(layer_stack.pop())
 #      A = concatenate([deconv, layer_stack.pop()], axis=cat_axis)
+      logger.debug("linking: [%s]-[%s]" % (str(deconv), str(layer_stack[-1])))
       A = function_context["link_fn"]([deconv, layer_stack.pop()])
-      A = function_context["conv_fn"](filter_size, conv_size, activation="relu", padding="same")(A)
-      A = function_context["conv_fn"](filter_size, conv_size, activation="relu", padding="same")(A)
+      logger.debug(str(A))
+      A = function_context["conv_fn"](**conv_params)(A)
+      logger.debug(str(A))
+      A = function_context["conv_fn"](**conv_params)(A)
+      logger.debug(str(A))
       layer_stack.append(A)
 
   @staticmethod
@@ -125,8 +144,6 @@ class UNet():
     pool_size = (2, ) * len(image_shape)
     cat_axis = len(image_shape) + 1
     sigmoid_conv_size = (1, ) * len(image_shape)
-
-    logger.info("building '%s': %i, %i" % (layer_name, position, depth))
 
     if position < depth: # down
       with tf.name_scope(layer_name):
@@ -205,20 +222,22 @@ class UNet():
 
     inputs = Input(self.image_shape + (self.channel_count, ))
     layer_stack.append(inputs)
+    logger.debug(str(inputs))
 
     # encoder
-    for i, filter_size in enumerate(self.filter_sizes):
-      name = "encoder_%i_%d" %(i, filter_size)
+    for idx, filter_size in enumerate(self.filter_sizes):
+      name = "encoder_%i_%d" %(idx, filter_size)
+      logger.info("building: '%s'[%s]" % (name, str(filter_size)))
       self.layer_builder(
           name,
           self.image_shape,
           filter_size,
           layer_stack,
           self.depth-1,
-          i,
+          idx,
           function_context)
 
-      if i == self.depth-1:
+      if idx == self.depth-1:
         self.encoder_output_name = "nadir"
 
     outputs = []
@@ -229,6 +248,7 @@ class UNet():
       for i, filter_size in enumerate(self.filter_sizes[:-1][::-1]):
         idx = len(self.filter_sizes)+i
         name = "%s_%i_%d" % (output_name, idx, filter_size)
+        logger.info("building: '%s'[%s]" % (name, str(filter_size)))
         self.layer_builder(
             name,
             self.image_shape,
@@ -240,6 +260,7 @@ class UNet():
 
       # FIXME: define this as a decoder output the same way we do labels?
       outputs += [function_context["conv_fn"](1, sigmoid_conv_size, activation="sigmoid", name=output_name)(local_layer_stack.pop())]
+      logger.debug(str(outputs[-1]))
 
     logger.info("layer_stack_length : %i" % len(local_layer_stack))
     assert(len(local_layer_stack) == 0) # ensure stack is exhausted
@@ -247,4 +268,5 @@ class UNet():
     logger.info("num outputs : %i" % len(outputs))
 
     model = Model(inputs=[inputs], outputs=outputs)
+
     return model
