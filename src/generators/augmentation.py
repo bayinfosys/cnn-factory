@@ -1,5 +1,7 @@
 import logging
 
+import numpy as np
+
 import imgaug as ia
 import imgaug.augmenters as iaa
 
@@ -7,7 +9,7 @@ import imgaug.augmenters as iaa
 logger = logging.getLogger(__name__)
 
 
-def create_augmentation_fn(num_augs = 4):
+def create_image_augmentation_fn(num_augs = 4):
   """
   create an augmentation pipeline and return a function
   which applies that pipeline to a pair of images, yielding
@@ -110,7 +112,10 @@ def create_augmentation_fn(num_augs = 4):
       aug_y = (aug_y > aug_y.mean()).astype(np.uint8) * 255
 
       # logger.debug("yielding: '%s'/'%s'" % (str(i_x.shape), str(i_y.shape)))
-      yield (aug_x[np.newaxis, ...].astype(np.float) / 255.0,
-             aug_y[np.newaxis, ...].astype(np.float) / 255.0)
+      yield (aug_x.astype(np.float) / 255.0,
+             aug_y.astype(np.float) / 255.0)
+
+  if num_augs == 0:
+    return None
 
   return augmentation
