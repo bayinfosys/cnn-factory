@@ -24,6 +24,8 @@ from training.args import get_argument_parser, parse_arguments
 from training.callbacks import create_keras_callbacks
 from training.model_builder import default_model_builder, MODEL_BUILDERS
 
+from preprocessing import default_image_filename_preprocess, default_label_filename_preprocess, validate_image_shape
+
 
 logger = logging.getLogger(__name__)
 
@@ -79,62 +81,6 @@ def default_model_compiler(
       loss=loss_fns[loss_fn_name],
       metrics=[metric_fns[m] for m in metric_names]
   )
-
-
-def preprocess_image(filename):
-  """
-  this should be merged with the training generator
-  so we replicate the image input pipeline
-  """
-  from skimage.transform import resize
-  from skimage.io import imread
-
-  try:
-    x = imread(filename).astype(np.float)/255.0
-  except ValueError as e:
-    # ValueError: Could not find a format to read the specified file in single-image mode
-    logger.error("%s: %s" % (filename, str(e)))
-    raise FileNotFoundError(filename) from e
-
-  x = resize(x, (256,256), anti_aliasing=True)
-  return x
-
-
-def preprocess_label(filename):
-  from skimage.transform import resize
-  from skimage.io import imread
-
-  try:
-    y = imread(filename).astype(np.uint8)
-  except FileNotFoundError as e:
-    logger.error("could not load: '%s'" % filename)
-    raise
-
-  y = (y==1).astype(np.float)
-  y = resize(y, (256, 256), anti_aliasing=True)
-
-  return y[..., np.newaxis]
-
-
-def validate_image(X):
-  if ((len(X.shape) != 3) or
-      (X.shape[0] != 256) or
-      (X.shape[1] != 256) or
-      (X.shape[2] != 3)):
-    logger.warning("[%s] expected [%s]" % (str(X.shape), str((256,256,3))))
-    return False
-
-  return True
-
-def validate_label(X):
-  if ((len(X.shape) != 3) or
-      (X.shape[0] != 256) or
-      (X.shape[1] != 256) or
-      (X.shape[2] != 1)):
-    logger.warning("[%s] expected [%s]" % (str(X.shape), str((256,256))))
-    return False
-
-  return True
 
 
 if __name__ == "__main__":
@@ -204,9 +150,6 @@ if __name__ == "__main__":
   assert len(images) > 0
   assert len(images) == len(masks)
 
-
-  # control memory allocation by tf
-#  K.set_image_dim_ordering("tf")
   #config = tf.ConfigProto()
 #  config.gpu_options.per_process_gpu_memory_fraction = 0.75
   #config.gpu_options.allow_growth = True
@@ -236,12 +179,20 @@ if __name__ == "__main__":
                   args.output_path
               )
 
+  # FIXME: here we want to load a function from /user.py given the function name in args
+  # TODO: should we have these functions accept the args variable? we could wrap all the
+  #       preproc/validators in a lambda and let them specialise based on runtime args
+  data_preprocess_fn = default_image_filename_preprocess if args.data_preprocess_fn is None else None
+  label_preprocess_fn = default_label_filename_preprocess if args.label_preprocess_fn is None else None
+  data_validation_fn = validate_image_shape if args.data_validation_fn is None else None
+  label_validation_fn = validate_image_shape if args.label_validation_fn is None else None
 
   # DATA
   from sklearn.model_selection import train_test_split
   train_x, test_x, train_y, test_y = train_test_split(images, masks, test_size=0.3)
 
   # TRAINING STEPS
+  # FIXME: run through the data to remove invalid data from the counts
   training_steps = len(train_x) // args.batch_size
   validation_steps = len(test_x) // args.batch_size
 
@@ -250,10 +201,10 @@ if __name__ == "__main__":
   training_generator = create_image_from_filenames_generator(
       train_x,
       train_y,
-      image_preprocess_fn=preprocess_image,
-      label_preprocess_fn=preprocess_label,
-      image_validation_fn=validate_image,
-      label_validation_fn=validate_label,
+      image_preprocess_fn=data_preprocess_fn,
+      label_preprocess_fn=label_preprocess_fn,
+      image_validation_fn=lambda x: data_validation_fn(x, tuple(args.image_shape) + (3,)),
+      label_validation_fn=lambda x: label_validation_fn(x, tuple(args.image_shape) + (1,)),
       shuffle_data=args.shuffle_data,
       # augmentation_fn=default_augmentation,
       # num_args = args.num_augs
@@ -262,10 +213,10 @@ if __name__ == "__main__":
   validation_generator = create_image_from_filenames_generator(
       test_x,
       test_y,
-      image_preprocess_fn=preprocess_image,
-      label_preprocess_fn=preprocess_label,
-      image_validation_fn=validate_image,
-      label_validation_fn=validate_label,
+      image_preprocess_fn=data_preprocess_fn,
+      label_preprocess_fn=label_preprocess_fn,
+      image_validation_fn=lambda x: data_validation_fn(x, tuple(args.image_shape) + (3,)),
+      label_validation_fn=lambda x: label_validation_fn(x, tuple(args.image_shape) + (1,)),
       shuffle_data=args.shuffle_data,
   )()
 

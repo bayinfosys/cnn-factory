@@ -19,6 +19,11 @@
      "type": "int",
      "default": 3
     },
+  "--label-count":
+    {"help": "number of label values per label image",
+     "type": "int",
+     "default": 1
+    },
   "--network-depth":
     {"help": "depth parameter of the network architecture",
      "type": "int",
@@ -38,6 +43,14 @@
      "type": "int",
      "default": 0
     },
+  "--data-preprocess-fn":
+    {"help": "name of the data preprocessing function in user.py"},
+  "--label-preprocess-fn":
+    {"help": "name of the label preprocessing function in user.py"},
+  "--data-validation-fn":
+    {"help": "name of the data validation function in user.py"},
+  "--label-validation-fn":
+    {"help": "name of the label validation function in user.py"},
 
   "--batch-size":
     {"help": "batch size to use in training. NB: only values of 1 are supported",
