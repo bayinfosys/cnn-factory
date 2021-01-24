@@ -1,10 +1,7 @@
-ARG BASE=tensorflow/tensorflow:2.2.2-gpu-py3
+ARG BASE=tensorflow/tensorflow:2.2.2-py3
 FROM $BASE
 
-RUN apt-get update && \
-    apt-get install --no-install-recommends -qqy libgl1-mesa-glx
-
-COPY requirements.txt /tmp/requirements.txt
+COPY requirements.serve.txt /tmp/requirements.txt
 
 # we have to install opencv for imgaug
 RUN pip install --no-cache-dir --upgrade pip && \
@@ -13,6 +10,6 @@ RUN pip install --no-cache-dir --upgrade pip && \
 
 COPY ./src /src
 
-ENTRYPOINT ["python3", "/src/serve.py"]
+WORKDIR /
 
-CMD ["--help"]
+CMD ["/bin/bash", "-c", "gunicorn --bind 0.0.0.0:5000 --worker-class gevent --access-logfile - src.serve:app"]

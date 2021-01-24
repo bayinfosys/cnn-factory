@@ -1,0 +1,10 @@
+scikit-learn
+scikit-image
+opencv-python
+imgaug==0.2.6
+pyyaml
+
+flask
+flask-cors
+
+gunicorn[gevent]
