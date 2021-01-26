@@ -7,7 +7,9 @@ from tensorflow.keras.layers import (Input, Activation,
                                      MaxPooling3D, UpSampling3D, Conv3DTranspose,
                                      Convolution2D,
                                      MaxPooling2D, Conv2DTranspose, UpSampling2D,
-                                     concatenate)
+                                     concatenate, add,
+                                     Flatten, Dense, Reshape,
+                                     GlobalMaxPool2D, GlobalMaxPool3D)
 
 from tensorflow.keras.models import Model
 
@@ -16,206 +18,287 @@ logger = logging.getLogger(__name__)
 
 
 class UNet():
-  """class to construct a Unet given an input shape and depth"""
+  """
+  class to construct a Unet
+
+  takes as input:
+    image_shape: tuple with size of spatial dimensions in the image;
+                 (x, y) for 2D, (x, y, z) for 3D, etc
+    channel_count: number of data channels in the image;
+                   1 for luminance, 3 for rgb, etc
+    network_depth: number of layers to create in the network
+    output_definitions: [optional] map of output names to definitions
+
+  output_definitions is a map of output_definition:
+  ```
+  {
+    "type": (category|numeric|segmentation|image),
+    "size": <number of outputs of this type>,
+    "weight": <0..1, contribution to the loss function>
+  }
+  ```
+
+  multiple outputs maybe specified, i.e.:
+  ```
+  {
+    "class_label_output": {"type":"category", "size":10, "weight": 1.0}
+    "number_value_output": {"type":"numeric", "size":1, "weight":0.5},
+    "semantic_map_output" : {"type":"segmentation", "size":1, "weight":0.2}
+  }
+  ```
+
+  `type`: (category|numeric|segmentation|image)
+    `category`: dense layer with `size` outputs`, (number of categories in the one-hot), relu activation
+    `numeric`: dense layer with `size` outputs, feeding a single output layer, relu activation
+    `segmentation`: image output with single channel, sigmoid activation
+    `image`: image output with network_depth channels, sigmoid activation
+  """
   def __init__(
       self,
       image_shape,
       channel_count=1,
       network_depth=6,
       filter_sizes=None,
-      output_names=["output_segmentation"]):
+      output_definitions=None):
+    """
+    initialise the variables in the model.
+
+    filter_sizes: number of filters at each layer in the network; the last element in this array
+                  defines the size of the latent space, and the reversed array defines the decoder
+                  filter progression.
+
+    output_definitions: map of output names to output definitions
+                        if none is specified, the default segmentation output is assumed
+    """
     self.image_shape = image_shape
     self.channel_count = channel_count
     self.depth = network_depth
     self.layer_builder = UNet.build_pooled_layer
-    #self.layer_builder = UNet.build_inception_layer
-    self.encoder_output_name = None  # output at the bottom of the unet
-    self.output_names = output_names
+    self.decoder_type = "upsample" # (upsample|convolution)
+    self.latent_space_mode = "normal" # (normal|vae)
+    self.layer_link_type = "concatenate" # (none|concatenate|add)
 
-    if filter_sizes is None or len(filter_sizes) == 0:
-      # generate a set of filter sizes
-      self.filter_sizes = [2**(x+4) for x in range(0, self.depth)]
-    elif len(filter_sizes) != self.depth:
-      raise "filter_sizes length must match network depth"
+    # FIXME: create a list of encoder_filters, latent_filters, and decoder_filters
+    self.filter_sizes = [2**(x+4) for x in range(0, self.depth)] if filter_sizes is None else filter_sizes
+
+    if len(self.filter_sizes) != self.depth:
+      raise ValueError("filter_sizes length must match network depth (%i != %i)" % (len(self.filter_sizes), self.depth))
+
+    if output_definitions is None:
+      self.decoder_definitions = {"output": {"type": "segmentation", "size": 1, "weight": 1.0}}
     else:
-      self.filter_sizes = filter_sizes
+      self.decoder_definitions = output_definitions
 
-  def _get_function_context(self):
-    if len(self.image_shape) == 2:
-      return {
-          "conv_fn" : Convolution2D,
-          "pool_fn" : MaxPooling2D,
-          "trns_fn" : UpSampling2D, #Conv2DTranspose
-          "link_fn" : concatenate}
-    elif len(self.image_shape) == 3:
-      return {
-          "conv_fn" : Convolution3D,
-          "pool_fn" : MaxPooling3D,
-          "trns_fn" : UpSampling3D, #Conv3DTranspose,
-          "link_fn" : concatenate}
-    return {}
+    # layer parameterisation
+    # FIXME: construct these parameters (and the function_context) into
+    #        a large map object which can be passed around, serialised,
+    #        and mocked for unit testing the block functions.
+    self.conv_size = (3, ) * len(self.image_shape)
+    self.pool_size = (2, ) * len(self.image_shape)
+    self.sigmoid_conv_size = (1, ) * len(self.image_shape)
 
-  @staticmethod
-  def build_pooled_layer(
-      layer_name,
-      image_shape,
-      filter_size,
-      layer_stack,
-      depth,
-      position,
-      function_context):
-    """build blocks of convolution -> convolution -> pooling layers
-    push and pop layers to the stack so we maintain depth linkages.
-    layer_name: tf name scope to apply to the block
-    image_shape: shape of the input image;
-                 NB: only the length is used to determine the kernel sizes
-    filter_size: number of filters to use in the convolution layers
-    layer_stack: list representing a stack of layers.
-                 Most recently added is at the end.
-    depth:  depth of this block in the unet;
-            controls whether a transpose/upsampling operation is performed
-    position: index of this block in total list of blocks,
-              usually total length is(2*depth)-1
-    function_context: dictionary of conv, pool, trns, etc. functions;
-                      so we can swap out 2d and 3d methods.
-    """
-    conv_size = (3, ) * len(image_shape)
-    pool_size = (2, ) * len(image_shape)
-    cat_axis = len(image_shape) + 1
-    sigmoid_conv_size = (1, ) * len(image_shape)
-
-    conv_params = {
-        "filters": filter_size,
-        "kernel_size": conv_size,
+    self.encoder_conv_params = {
+        "kernel_size": self.conv_size,
         "activation": "relu",
         "padding": "same"
     }
 
-    pool_params = {
-        "pool_size": pool_size,
+    self.encoder_pool_params = {
+        "pool_size": self.pool_size,
         "padding": "same"
     }
 
-    if position < depth: # down
-      A = function_context["conv_fn"](**conv_params)(layer_stack.pop())
-      logger.debug(str(A))
-      A = function_context["conv_fn"](**conv_params)(A)
-      logger.debug(str(A))
-      B = function_context["pool_fn"](**pool_params)(A)
-      logger.debug(str(B))
-      layer_stack.append(A)
-      layer_stack.append(B)
-    if position == depth: # apex
-      A = function_context["conv_fn"](**conv_params)(layer_stack.pop())
-      logger.debug(str(A))
-      A = function_context["conv_fn"](**conv_params, name="nadir")(A)
-      logger.debug(str(A))
-      layer_stack.append(A)
-    if position > depth: # back up
-      if function_context["trns_fn"] is UpSampling2D or function_context["trns_fn"] is UpSampling3D:
-        deconv = function_context["trns_fn"](pool_size)(layer_stack.pop())
-      elif function_context["trns_fn"] is Conv2DTranspose or function_context["trns_fn"] is Conv3DTranspose:
-        deconv = function_context["trns_fn"](filter_size, stride_size=pool_size)(layer_stack.pop())
-#      A = concatenate([deconv, layer_stack.pop()], axis=cat_axis)
-      logger.debug("linking: [%s]-[%s]" % (str(deconv), str(layer_stack[-1])))
-      A = function_context["link_fn"]([deconv, layer_stack.pop()])
-      logger.debug(str(A))
-      A = function_context["conv_fn"](**conv_params)(A)
-      logger.debug(str(A))
-      A = function_context["conv_fn"](**conv_params)(A)
-      logger.debug(str(A))
-      layer_stack.append(A)
+    self.latent_params = {
+        "activation": "relu"
+    }
 
-  @staticmethod
-  def build_inception_layer(
-      layer_name,
-      image_shape,
-      filter_size,
-      layer_stack,
-      depth,
-      position,
-      function_context):
-    """same as pooled layer but inception layer type has a 1x1
-    convolution at the begining of each block to reduce the number
-    of filters from the previous layer down to 32.
-    i.e., each layer has an input of 32 filters.
+    self.output_conv_kernel = (1, ) * len(self.image_shape)
+
+    self.output_conv_params = {
+        "filters": 32,
+        "kernel_size": self.output_conv_kernel,
+        "activation": "relu",
+        "padding": "same"
+    }
+
+    self.function_context = self._get_function_context()
+
+  def _get_function_context(self):
     """
-    conv_size = (3, ) * len(image_shape)
-    pool_size = (2, ) * len(image_shape)
-    cat_axis = len(image_shape) + 1
-    sigmoid_conv_size = (1, ) * len(image_shape)
+    create a map of functions to use for layer building operations.
+    if we are working on 2D images, use 2D layers,
+    if we are working on 3D images, use 3D layers
 
-    if position < depth: # down
-      with tf.name_scope(layer_name):
-        A = function_context["conv_fn"](32, (1, 1), activation="relu", padding="same")(layer_stack.pop())
-        A = function_context["conv_fn"](filter_size, conv_size, activation="relu", padding="same")(A)
-        A = function_context["conv_fn"](filter_size, conv_size, activation="relu", padding="same")(A)
-        B = function_context["pool_fn"](pool_size=pool_size, padding="same")(A)
-        layer_stack.append(A)
-        layer_stack.append(B)
-    if position == depth: # apex
-      with tf.name_scope(layer_name):
-        A = function_context["conv_fn"](32, (1, 1), activation="relu", padding="same")(layer_stack.pop())
-        A = function_context["conv_fn"](filter_size, conv_size, activation="relu", padding="same")(A)
-        # FIXME: this name "nadir" is special, it is the bottom of the unet,
-        # and the end of the decoder architecture,
-        # we want this to be self.encoder_output_name in the unet object,
-        # but because the block builder functions are static, we have no
-        # reference to that object.
-        # I would prefer not to expand the state of the unet object over
-        # these block builder functions;
-        # Maybe use internal functions with a closure around the name?
-        A = function_context["conv_fn"](filter_size, conv_size, activation="relu", padding="same", name="nadir")(A)
-        layer_stack.append(A)
-    if position > depth: # back up
-      A = function_context["conv_fn"](32, (1, 1), activation="relu", padding="same")(layer_stack.pop())
-      if function_context["trns_fn"] is UpSampling2D or function_context["trns_fn"] is UpSampling3D:
-        deconv = function_context["trns_fn"](pool_size)(A)
-      elif function_context["trns_fn"] is Conv2DTranspose or function_context["trns_fn"] is Conv3DTranspose:
-        deconv = function_context["trns_fn"](filter_size, stride_size=pool_size)(A)
-      with tf.name_scope(layer_name):
-        A = function_context["link_fn"]([deconv, layer_stack.pop()])
-        A = function_context["conv_fn"](filter_size, conv_size, activation="relu", padding="same")(A)
-        A = function_context["conv_fn"](filter_size, conv_size, activation="relu", padding="same")(A)
-        layer_stack.append(A)
-
-  @staticmethod
-  def build_residual_layer(
-      layer_name,
-      image_shape,
-      filter_size,
-      layer_stack,
-      depth,
-      position,
-      function_context):
-    """same as pooled layer but adds block outputs instead of concatenating.
-    no dimension rediction is performed.
-    NB: the pooled layer function can do this by changing the
-    function_context to use sum instead of concatenate.
+    decoder_type: type of layer to use in the decoder stage for restoring image size
+                  `upsample` uses upsampling layers
+                  `convolution` uses transposed convolutional layers
+    layer_link_type: type of connection between layers at different scales:
+                     `none` no connecting of encoder and decoder layers (typical CNN)
+                     `concatenate` joins the two layers in the UNet style
+                     `add` sums the two layers in the resnet style (this
+                     requires a skip architecture which is not implemented)
+    latent_space_mode: layer type to use for the latent space between the
+                       encoder and decoder stages.
+                       `normal` is a convolutional layer as used elsewhere,
+                       `vae` is a dense layer (mlp) as used in vae architectures.
+    NB: here, we can change the link_fn to "sum" to build a resnet
     """
-    input = layer_stack.pop()
-    conv_size = (3, ) * len(image_shape)
-    pool_size = (2 **(position), ) * len(image_shape)
+    link_layers = {
+        "none": lambda l: l[0],
+        "concatenate": concatenate,
+        "add": add
+    }
 
-    logger.info("%s: %s" % (layer_name, str(pool_size)))
+    # FIXME: 1D convolution
+    if len(self.image_shape) == 2:
+      return {
+          "conv": Convolution2D,
+          "pool": MaxPooling2D,
+          "trns": UpSampling2D if self.decoder_type == "upsample" else Conv2DTranspose,
+          "link": link_layers[self.layer_link_type],
+          "latent": Convolution2D if self.latent_space_mode == "normal" else Dense,
+          "global": GlobalMaxPool2D,
+      }
+    elif len(self.image_shape) == 3:
+      return {
+          "conv": Convolution3D,
+          "pool": MaxPooling3D,
+          "trns": UpSampling3D if self.decoder_type == "upsample" else Conv3DTranspose,
+          "link": link_layers[self.layer_link_type],
+          "latent": Convolution3D if self.latent_space_mode == "normal" else Dense,
+          "global": GlobalMaxPool3D,
+      }
 
-    x = function_context["pool_fn"](pool_size=pool_size)(input)
-    x = function_context["conv_fn"](32, conv_size, activation="relu", padding="same")(x)
-    x = function_context["conv_fn"](32, conv_size, activation="relu", padding="same")(x)
-    x = UpSampling2D(size=pool_size)(x)
+    else:
+      raise NotImplementedError("Cannot build function context for %iD images" % len(self.image_shape))
 
-  #  x = layers.add([input, x])
-    x = function_context["link_fn"]([input, x])
-    x = Activation("relu")(x)
+  def encoder_block(self, filter_size, layer_stack):
+    """
+    construct an encoder block
+      conv
+      conv
+      pool
+    """
+    conv_params = {}
+    conv_params.update(self.encoder_conv_params)
+    conv_params["filters"] = filter_size
 
-    layer_stack.append(x)
+    pool_params = {}
+    pool_params.update(self.encoder_pool_params)
+
+    A = self.function_context["conv"](**conv_params)(layer_stack.pop())
+    logger.debug(str(A))
+    A = self.function_context["conv"](**conv_params)(A)
+    logger.debug(str(A))
+    B = self.function_context["pool"](**pool_params)(A)
+    logger.debug(str(B))
+    layer_stack.append(A)
+    layer_stack.append(B)
+
+  def latent_block(self, filter_size, layer_stack):
+    """
+    construct a latent space block
+      conv
+      conv
+    or
+      flatten
+      dense
+      reshape
+    """
+    conv_params = {}
+    conv_params.update(self.encoder_conv_params)
+    conv_params["filters"] = filter_size
+
+    latent_params = {}
+    latent_params.update(self.latent_params)
+    latent_params["filters"] = filter_size
+
+    if (self.function_context["latent"] is Convolution2D or
+        self.function_context["latent_fn"] is Convolution3D):
+      A = self.function_context["conv"](**conv_params)(layer_stack.pop())
+      logger.debug(str(A))
+      A = self.function_context["conv"](**conv_params, name="latent")(A)
+      logger.debug(str(A))
+    elif self.function_context["latent"] is Dense:
+      latent_input = layer_stack.pop()
+      logger.debug(str(latent_input))
+
+      A = Flatten()(latent_input)
+      logger.debug(str(A))
+
+      A = function_context["latent"](**latent_params, name="latent")(A)
+      logger.debug(str(A))
+      A = function_context["latent"](units=tf.math.reduce_prod(latent_input.shape[1:]), activation=latent_params["activation"])(A)
+      logger.debug(str(A))
+      A = Reshape(target_shape=latent_input.shape[1:])(A)
+      logger.debug(str(A))
+    else:
+      raise NotImplementedError("Unknown latent space mode: '%s'" % function_context["latent"])
+
+    layer_stack.append(A)
+
+  def decoder_block(self, filter_size, layer_stack):
+    """
+    decoder block
+      upsample/transpose convolution
+      none/concatenate/add
+      conv
+      conv
+    """
+    conv_params = {}
+    conv_params.update(self.encoder_conv_params)
+    conv_params["filters"] = filter_size
+
+    if (self.function_context["trns"] is UpSampling2D or
+        self.function_context["trns"] is UpSampling3D):
+      deconv = self.function_context["trns"](self.pool_size)(layer_stack.pop())
+    elif (self.function_context["trns"] is Conv2DTranspose or
+          self.function_context["trns"] is Conv3DTranspose):
+      deconv = self.function_context["trns"](filter_size, stride_size=self.pool_size)(layer_stack.pop())
+
+    logger.debug("linking: [%s]-[%s]" % (str(deconv), str(layer_stack[-1])))
+    A = self.function_context["link"]([deconv, layer_stack.pop()])
+    logger.debug(str(A))
+    A = self.function_context["conv"](**conv_params)(A)
+    logger.debug(str(A))
+    A = self.function_context["conv"](**conv_params)(A)
+    logger.debug(str(A))
+    layer_stack.append(A)
+
+  def output_block(self, type, filter_size, name, layer_stack):
+    # FIXME: encapsulate this into "output_layer" function which creates the block
+    if type == "segmentation":
+      return self.function_context["conv"](
+               1,
+               self.output_conv_kernel,
+               activation="sigmoid",
+               name=name)(layer_stack.pop())
+    elif type == "image":
+      return self.function_context["conv"](
+               self.channel_count,
+               self.output_conv_kernel,
+               activation="sigmoid",
+               name=name)(layer_stack.pop())
+    elif decoder["type"] == "category":
+      # size here is the number of categories in a one-hot encoding
+      M = self.function_context["global"]()(layer_stack.pop())
+      logger.debug(str(M))
+      return Dense(filter_size, activation="softmax", name=name)(M)
+    elif decoder["type"] == "numeric":
+      # regression requires no activation function
+      M = self.function_context["global"]()(layer_stack.pop())
+      logger.debug(str(M))
+      M = Dense(filter_size, activation=None)(M)
+      logger.debug(str(M))
+      return Dense(1, activation=None, name=name)(M)
+    else:
+      raise NotImplementedError("unknown output type: '%s'" % type)
+
 
   def __call__(self):
-    """constructs a keras model representing this unet"""
-    sigmoid_conv_size = (1, ) * len(self.image_shape)
-
-    function_context = self._get_function_context()
-
+    """
+    constructs a keras model representing this unet
+    """
     layer_stack = []
 
     logger.info("UNET [%i] : %s" % (len(self.filter_sizes), str(self.filter_sizes)))
@@ -224,48 +307,39 @@ class UNet():
     layer_stack.append(inputs)
     logger.debug(str(inputs))
 
-    # encoder
-    for idx, filter_size in enumerate(self.filter_sizes):
-      name = "encoder_%i_%d" %(idx, filter_size)
-      logger.info("building: '%s'[%s]" % (name, str(filter_size)))
-      self.layer_builder(
-          name,
-          self.image_shape,
-          filter_size,
-          layer_stack,
-          self.depth-1,
-          idx,
-          function_context)
+    # build encoder layers for all layers up the last layer
+    for idx, filter_size in enumerate(self.filter_sizes[:-1]):
+      name = "encoder_%i" % idx
+      logger.info("building: '%s'" % name)
+      self.encoder_block(filter_size, layer_stack)
 
-      if idx == self.depth-1:
-        self.encoder_output_name = "nadir"
+    # build a latent space layer with the last number of filters
+    latent_size = self.filter_sizes[-1]
+    name = "latent"
+    logger.info("building: '%s'" % name)
+    self.latent_block(latent_size, layer_stack)
 
+    # build decoder layers by reversing the filter_size array
     outputs = []
 
-    for output_name in self.output_names:
+    for decoder_name, decoder in self.decoder_definitions.items():
       local_layer_stack = list(layer_stack)
 
       for i, filter_size in enumerate(self.filter_sizes[:-1][::-1]):
         idx = len(self.filter_sizes)+i
-        name = "%s_%i_%d" % (output_name, idx, filter_size)
-        logger.info("building: '%s'[%s]" % (name, str(filter_size)))
-        self.layer_builder(
-            name,
-            self.image_shape,
-            filter_size,
-            local_layer_stack,
-            self.depth-1,
-            idx,
-            function_context)
+        name = "%s_%i" % (decoder_name, idx)
+        logger.info("building: '%s'" % name)
+        self.decoder_block(filter_size, local_layer_stack)
 
-      # FIXME: define this as a decoder output the same way we do labels?
-      outputs += [function_context["conv_fn"](1, sigmoid_conv_size, activation="sigmoid", name=output_name)(local_layer_stack.pop())]
-      logger.debug(str(outputs[-1]))
+      # build the final output layer dependent on which data type is requested
+      output = self.output_block(decoder["type"], decoder["size"], decoder_name, local_layer_stack)
+      logger.debug(str(output))
+      outputs.append(output)
 
-    logger.info("layer_stack_length : %i" % len(local_layer_stack))
-    assert(len(local_layer_stack) == 0) # ensure stack is exhausted
+    # this is an error in the model structure, it is quite serious
+    assert len(local_layer_stack) == 0, "local_layer_stack not exhausted (%i)" % len(local_layer_stack)
 
-    logger.info("num outputs : %i" % len(outputs))
+    logger.info("created %i outputs" % len(outputs))
 
     model = Model(inputs=[inputs], outputs=outputs)
 
