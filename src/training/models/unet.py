@@ -1,3 +1,4 @@
+import json
 import logging
 
 import tensorflow as tf
@@ -73,7 +74,6 @@ class UNet():
     self.image_shape = image_shape
     self.channel_count = channel_count
     self.depth = network_depth
-    self.layer_builder = UNet.build_pooled_layer
     self.decoder_type = "upsample" # (upsample|convolution)
     self.latent_space_mode = "normal" # (normal|vae)
     self.layer_link_type = "concatenate" # (none|concatenate|add)
@@ -85,8 +85,10 @@ class UNet():
       raise ValueError("filter_sizes length must match network depth (%i != %i)" % (len(self.filter_sizes), self.depth))
 
     if output_definitions is None:
+      logger.warning("no output definitions; using default")
       self.decoder_definitions = {"output": {"type": "segmentation", "size": 1, "weight": 1.0}}
     else:
+      logger.info("output_definitions: '%s'" % json.dumps(output_definitions))
       self.decoder_definitions = output_definitions
 
     # layer parameterisation
@@ -279,14 +281,18 @@ class UNet():
                self.output_conv_kernel,
                activation="sigmoid",
                name=name)(layer_stack.pop())
-    elif decoder["type"] == "category":
+    elif type == "category":
       # size here is the number of categories in a one-hot encoding
       M = self.function_context["global"]()(layer_stack.pop())
+      M = Flatten()(M)
+      #M = Dense(128, activation="relu")(M)
       logger.debug(str(M))
       return Dense(filter_size, activation="softmax", name=name)(M)
-    elif decoder["type"] == "numeric":
+    elif type == "numeric":
       # regression requires no activation function
       M = self.function_context["global"]()(layer_stack.pop())
+      logger.debug(str(M))
+      M = Flatten()(M)
       logger.debug(str(M))
       M = Dense(filter_size, activation=None)(M)
       logger.debug(str(M))
@@ -325,19 +331,21 @@ class UNet():
     for decoder_name, decoder in self.decoder_definitions.items():
       local_layer_stack = list(layer_stack)
 
-      for i, filter_size in enumerate(self.filter_sizes[:-1][::-1]):
-        idx = len(self.filter_sizes)+i
-        name = "%s_%i" % (decoder_name, idx)
-        logger.info("building: '%s'" % name)
-        self.decoder_block(filter_size, local_layer_stack)
+      # only image or segmentation outputs require the full upscaling decoder
+      if decoder["type"] == "image" or decoder["type"] == "segmentation":
+        for i, filter_size in enumerate(self.filter_sizes[:-1][::-1]):
+          idx = len(self.filter_sizes)+i
+          name = "%s_%i" % (decoder_name, idx)
+          logger.info("building: '%s'" % name)
+          self.decoder_block(filter_size, local_layer_stack)
 
       # build the final output layer dependent on which data type is requested
       output = self.output_block(decoder["type"], decoder["size"], decoder_name, local_layer_stack)
       logger.debug(str(output))
       outputs.append(output)
 
-    # this is an error in the model structure, it is quite serious
-    assert len(local_layer_stack) == 0, "local_layer_stack not exhausted (%i)" % len(local_layer_stack)
+      # this is an error in the model structure, it is quite serious
+      #assert len(local_layer_stack) == 0, "local_layer_stack not exhausted (%i)" % len(local_layer_stack)
 
     logger.info("created %i outputs" % len(outputs))
 

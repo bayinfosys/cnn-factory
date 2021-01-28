@@ -1,6 +1,11 @@
 ARG BASE=python:3
 FROM $BASE
 
+LABEL maintainer="ed@bayis.co.uk"
+
+RUN apt-get update && \
+    apt-get install --no-install-recommends -qqy libgl1-mesa-glx
+
 COPY requirements.txt /tmp/requirements.txt
 
 # we have to install opencv for imgaug

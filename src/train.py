@@ -18,13 +18,17 @@ from common.loss import (dice_coef,
 
 from common.schedulers import step_decay
 
-from generators import create_image_from_filenames_generator, create_image_augmentation_fn
+from generators import (create_image_from_filenames_generator,
+                        create_image_augmentation_fn,
+                        csv_to_lists)
 
 from training.args import get_argument_parser, parse_arguments
 from training.callbacks import create_keras_callbacks
 from training.model_builder import default_model_builder, MODEL_BUILDERS
 
-from preprocessing import default_image_filename_preprocess, default_label_filename_preprocess, validate_image_shape
+from preprocessing import (default_input_loader,
+                           default_label_loader,
+                           validate_tensor_shape)
 
 
 logger = logging.getLogger(__name__)
@@ -37,9 +41,9 @@ logging.getLogger("matplotlib").setLevel(logging.WARNING)
 def default_model_compiler(
         model,
         optimizer_name,
-        loss_fn_name,
         metric_names,
-        learning_rate
+        learning_rate,
+        output_definitions=None
     ):
   """
   compile the model with an optimizer and loss function
@@ -48,9 +52,10 @@ def default_model_compiler(
            it needs access to the loss functions from common
   """
   import tensorflow.keras as keras
+  from tensorflow.keras.losses import CategoricalCrossentropy
 
-  logger.info("compiling model with: '%s', '%s', '%s', %f" % (
-      optimizer_name, loss_fn_name, str(metric_names), learning_rate))
+  logger.info("compiling model with: optim='%s', metrics='%s', lr=%f" % (
+      optimizer_name, str(metric_names), learning_rate))
 
   optimizer_fns = {
       "sgd": keras.optimizers.SGD,
@@ -68,18 +73,21 @@ def default_model_compiler(
       "bce_dice": bce_dice,
       "dice": dice_coef_loss,
       "binary_crossentropy": "binary_crossentropy",
-      "jaccard": jaccard_index_loss
+      "jaccard": jaccard_index_loss,
+      "categorical_crossentropy": "categorical_crossentropy",
   }
 
   metric_fns = {
       "dice": dice_coef
   }
 
+  loss = {k:loss_fns[v["loss"]] for k,v in output_definitions.items()}
+
   # compile the model
   model.compile(
       optimizer=optimizer_fns[optimizer_name](**optimizer_args),
-      loss=loss_fns[loss_fn_name],
-      metrics=[metric_fns[m] for m in metric_names]
+      loss=loss,
+      metrics=[metric_fns[m] for m in metric_names] if metric_names is not None else None
   )
 
 
@@ -115,6 +123,7 @@ if __name__ == "__main__":
   import os
   from os.path import exists
   from glob import glob
+  import json
 
   log_format = "[%(asctime)s] - %(name)s:%(lineno)d - %(levelname)s - %(message)s"
 
@@ -130,66 +139,63 @@ if __name__ == "__main__":
   parser = get_argument_parser()
   args = parse_arguments(parser)
 
-  images = sorted(glob(args.images))
-  masks = sorted(glob(args.masks))
+  # load the data definition from the csv or input globs
+  if args.csv is not None:
+    data = csv_to_lists(args.csv)
+    logger.info("read %i/%i rows/columns" % (len(list(data.values())[0]), len(data.keys())))
 
-  logger.info("found %i/%i images/masks" % (len(images), len(masks)))
-  assert len(images) > 0
+    input_keys = args.inputs
+    output_definitions = {}
 
-  # get the intersection of the images and masks so we only get images with masks and vice-versa
-  # FIXME: if we have a dir wildcard in the search (imgs/*/*.png) basename will not give the correct results
-  # FIXME: if the images are a different file type, we get a mismatch
-  image_basenames = set([basename(f).split(".")[0] for f in images])
-  mask_basenames = set([basename(m).split(".")[0] for m in masks])
+    for oks in [json.loads(x) for x in args.outputs]:
+      output_definitions.update(oks)
 
-  images = [f for f, b in zip(images, image_basenames) if b in mask_basenames]
-  masks  = [m for m, b in zip(masks, mask_basenames)  if b in image_basenames]
+    assert input_keys is not None, "require input column names when using csvfile"
+    assert output_definitions is not None, "require output column names when using csvfile"
 
-  logger.info("found %i/%i overlapping images/masks" % (len(images), len(masks)))
-  # FIXME: improve error reporting here, list the directories searched, glob params, etc
-  assert len(images) > 0
-  assert len(images) == len(masks)
+    logger.info("inputs: '%s'" % str(input_keys))
+    logger.info("outputs: '%s'" % str(output_definitions))
 
-  #config = tf.ConfigProto()
-#  config.gpu_options.per_process_gpu_memory_fraction = 0.75
-  #config.gpu_options.allow_growth = True
-  #K.set_session(tf.Session(config=config))
+    # create sets of tuples for the inputs and ouputs
+    inputs = list(zip(*[data[k] for k in input_keys]))
+    outputs = list(zip(*[data[k] for k in output_definitions]))
+  elif args.images is not None and args.labels is not None:
+    # FIXME: scrap this glob loading; if people want to glob they can build a csv...
+    # read the image filenames
+    logger.warning("GLOB LOADING IS DEPRECATED, GO FUCK YOUSELF")
+    inputs = [(x,) for x in sorted(glob(args.images))]
+    outputs = [(y,) for y in sorted(glob(args.masks))]
 
-  # MODEL
-  model = default_model_builder(
-              model_type=args.modeltype,
-              image_shape=tuple(args.image_shape),
-              channel_count=3,
-              network_depth=args.network_depth
-          )
+    input_keys = None
+    output_definitions = None
+  else:
+    raise NotImplementedError("Cannot generate data from nothing")
 
-  print(model.summary())
-
-  default_model_compiler(
-      model,
-      optimizer_name=args.optimizer,
-      loss_fn_name=args.loss_function,
-      metric_names=args.training_metrics,
-      learning_rate=args.learning_rate
-  )
-
-  callbacks = create_keras_callbacks(
-                  model,
-                  args.modelname,
-                  args.output_path
-              )
+  logger.info("found %i/%i inputs/outputs" % (len(inputs), len(outputs)))
+  assert len(inputs) > 0
+  assert len(outputs) > 0
+  assert len(inputs) == len(outputs)
 
   # FIXME: here we want to load a function from /user.py given the function name in args
   # TODO: should we have these functions accept the args variable? we could wrap all the
   #       preproc/validators in a lambda and let them specialise based on runtime args
-  data_preprocess_fn = default_image_filename_preprocess if args.data_preprocess_fn is None else None
-  label_preprocess_fn = default_label_filename_preprocess if args.label_preprocess_fn is None else None
-  data_validation_fn = validate_image_shape if args.data_validation_fn is None else None
-  label_validation_fn = validate_image_shape if args.label_validation_fn is None else None
+  data_preprocess_fn = default_input_loader if args.data_preprocess_fn is None else None
+
+#  label_preprocess_fn = default_label_loader if args.label_preprocess_fn is None else None
+  logger.debug("types: '%s'" % str([o["type"] for o in output_definitions.values()]))
+  logger.debug("shapes: '%s'" % str([o["size"] for o in output_definitions.values()]))
+  if args.label_preprocess_fn is None:
+    label_preprocess_fn = lambda y: default_label_loader(y, types=[o["type"] for o in output_definitions.values()], shapes=[o["size"] for o in output_definitions.values()])
+  else:
+    label_preprocess_fn = args.data_preprocess_fn
+
+
+  data_validation_fn = validate_tensor_shape if args.data_validation_fn is None else None
+  label_validation_fn = validate_tensor_shape if args.label_validation_fn is None else None
 
   # DATA
   from sklearn.model_selection import train_test_split
-  train_x, test_x, train_y, test_y = train_test_split(images, masks, test_size=0.3)
+  train_x, test_x, train_y, test_y = train_test_split(inputs, outputs, test_size=0.3)
 
   # FIXME: get the name of the augmentation function from args
   augmentation_fn = create_image_augmentation_fn(args.num_augs)
@@ -221,6 +227,34 @@ if __name__ == "__main__":
       label_validation_fn=lambda x: label_validation_fn(x, tuple(args.image_shape) + (1,)),
       shuffle_data=args.shuffle_data
   )()
+
+  # FIXME: run through the generators here so we use the
+  #        validation functions to verify the data.
+
+  # MODEL
+  model = default_model_builder(
+              model_type=args.modeltype,
+              image_shape=tuple(args.image_shape),
+              channel_count=3,
+              network_depth=args.network_depth,
+              output_definitions=output_definitions,
+          )
+
+  print(model.summary())
+
+  default_model_compiler(
+      model,
+      optimizer_name=args.optimizer,
+      metric_names=args.training_metrics,
+      learning_rate=args.learning_rate,
+      output_definitions=output_definitions
+  )
+
+  callbacks = create_keras_callbacks(
+                  model,
+                  args.modelname,
+                  args.output_path
+              )
 
   # TRAIN
   model.fit(training_generator,

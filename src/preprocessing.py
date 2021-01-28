@@ -60,14 +60,94 @@ def default_label_filename_preprocess(filename, label_value=1):
   return y[..., np.newaxis]
 
 
-def validate_image_shape(X, input_shape):
+def validate_tensor_shape(X, expected_shape):
   """
-  return true if the shape of X matches the tuple input_shape
+  return true if the shape of X matches the tuple expected_shape
   false otherwise
   """
-  if ((len(X.shape) != len(input_shape)) or
-      (not all([i == j for i, j in zip(X.shape, input_shape)]))):
-    logger.warning("[%s] expected [%s]" % (str(X.shape), str(input_shape)))
-    return False
-
+  # FIXME: I don't know how to pass this expected_shape through
+  #        How can we know the expected shape from the cli
   return True
+#  assert isinstance(X, type(expected_shape))
+#  assert len(X) == len(expected_shape)
+#
+#  for x, ex in zip(X, expected_shape):
+#    assert all([i == j for i, j in zip(x.shape, ex)])
+#
+#  return True
+
+
+def convert_to_unit_range(image):
+  """convert the image to a unit range
+  """
+  nan_idx = np.isnan(image)
+  img_min = image[~nan_idx].min()
+  img_max = image[~nan_idx].max()
+  return (image-img_min)/(img_max-img_min)
+
+
+def convert_to_zscore(image):
+  """compute the mean and std without nans and without zeros as nans
+     convert the image to z-score of the mean/std values
+  """
+  nan_idx = np.isnan(image)
+  img_mu = image[~nan_idx].mean()
+  img_std = image[~nan_idx].std()
+  return (image-img_mu)/(img_std)
+
+
+def convert_nan_to_zero(image):
+  """zero out the nans in both the image and label
+     FIXME: if we have a labelmap associate with this
+            image we should alter the label in the same
+            locations?
+  """
+  nan_idx = np.isnan(image)
+  image[nan_idx] = 0
+
+
+def default_input_loader(Xs):
+  """
+  load input data from a tuple with one or more entries
+  """
+  from os.path import exists
+
+  i = []
+
+  # FIXME: somehow, take a bool->fn map as parameter to invert
+  #        the data type handling, so we are not tied to these rules
+  for x in Xs:
+    if isinstance(x, str) and exists(x):
+      v = default_image_filename_preprocess(x)
+    else:
+      v = np.array([x]).astype(np.float)
+
+    i.append(v)
+
+  return i
+
+
+def default_label_loader(ys, types, shapes):
+  """
+  load a label data from a tuple with one or more entries
+  """
+  from os.path import exists
+
+  i = []
+
+  for idx, y in enumerate(ys):
+    if types[idx] == "image" or types[idx] == "segmentation":
+      assert isinstance(y, str) and exists(y)
+      v = default_label_filename_preprocess(y)
+    elif types[idx] == "category":
+      # one-hot
+      v = np.zeros(shapes[idx]).astype(np.float)
+      v[int(y)-1] = 1.0
+    elif types[idx] == "numeric":
+      v = np.array([y]).astype(np.float)
+    else:
+      raise NotImplementedError("cannot process type of element %i (%s)" % (idx, str(ys)))
+
+    i.append(v)
+
+  return i

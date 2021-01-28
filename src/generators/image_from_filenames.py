@@ -83,7 +83,9 @@ def create_image_from_filenames_generator(
           write_label_image(debug_output_path, epoch_idx, basename(X), i_x, i_y)
 
         # logger.debug("yielding: '%s'/'%s'" % (str(i_x.shape), str(i_y.shape)))
-        yield i_x[np.newaxis, ...], i_y[np.newaxis, ...]
+        # NB: this is the incantation which turns the generator data into
+        # batch compatible shapes (just adds a new axis at the front).
+        yield [np.array([x]) for x in i_x], [np.array([y]) for y in i_y]
 
         if augmentation_fn is not None:
           for aug_id, (aug_x, aug_y) in enumerate(augmentation_fn(i_x, i_y)):
@@ -100,6 +102,7 @@ def create_image_from_filenames_generator(
               continue
 
             # logger.debug("yielding: '%s'/'%s'" % (str(i_x.shape), str(i_y.shape)))
-            yield aug_x[np.newaxis, ...], aug_y[np.newaxis, ...]
+            yield [np.array([x]) for x in aug_x], [np.array([y]) for y in aug_y]
+
 
   return gen

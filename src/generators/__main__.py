@@ -1,6 +1,11 @@
 """
 top level function to run the generators and augmentations
 outside a training process
+
+Simply loads the inputs and labels of a data set and prints
+the shape to stdout.
+If the input is a filename input_loader attempts to read the
+file as an image.
 """
 import os
 import sys
@@ -17,6 +22,7 @@ from skimage.transform import resize
 
 from .image_from_filenames import create_image_from_filenames_generator
 from .write_image_label import write_image_label
+from .csv_generator import csv_to_lists
 
 
 def setup_logging():
@@ -33,6 +39,9 @@ def setup_logging():
 
 def setup_argparse():
   parser = argparse.ArgumentParser(description="generate and augment images")
+  parser.add_argument("--csv", help="filename of csv containing inputs and outputs")
+  parser.add_argument("--inputs", nargs="+", help="csv column names of input data")
+  parser.add_argument("--outputs", nargs="+", help="csv column names of output data")
   parser.add_argument("--images", "-i", help="glob pattern of filenames for the images")
   parser.add_argument("--labels", "-l", help="glob pattern of filenames for the label images")
   parser.add_argument("--output", "-o", help="output directory")
@@ -42,6 +51,55 @@ def setup_argparse():
   return parser
 
 
+def input_loader(xs):
+  """load input data"""
+  from os.path import exists
+
+  i = []
+
+  for x in xs:
+    if isinstance(x, str) and exists(x):
+      v = imread(x).astype(np.float) / 255.0
+      v = resize(v, tuple(args.size), anti_aliasing=False)
+    else:
+      v = np.array(x)
+
+    i.append(v)
+
+  i = np.array(i).astype(np.float) if len(i) > 1 else i[0]
+
+  logger.debug("input.shape: '%s:%s'" % (str(i.shape), str(i.dtype)))
+  return i
+
+
+def label_loader(ys):
+  """load a label file"""
+  from os.path import exists
+
+  l = []
+
+  for y in ys:
+    if isinstance(y, str) and exists(y):
+      v = imread(y).astype(np.uint8)
+      v = (v==1).astype(np.float)
+      v = resize(v, tuple(args.size), anti_aliasing=False)
+    else:
+      v = np.array(y)
+
+    l.append(v)
+
+  l = np.array(l).astype(np.float) if len(l) > 1 else l[0]
+
+  logger.debug("label.shape: '%s:%s'" % (str(l.shape), str(l.dtype)))
+  return l
+
+
+def input_validator(x):
+  return x is not None
+
+def label_validator(x):
+  return x is not None
+
 if __name__ == "__main__":
   setup_logging()
   parser = setup_argparse()
@@ -49,43 +107,37 @@ if __name__ == "__main__":
 
   logger = logging.getLogger(__name__)
 
-  # read the image filenames
-  images = sorted(glob(args.images))
-  labels = sorted(glob(args.labels))
-  logger.info("found %i/%i images/labels" % (len(images), len(labels)))
+  if args.csv is not None:
+    data = csv_to_lists(args.csv)
+    logger.info("found %i/%i rows/columns" % (len(list(data.items())[0]), len(data)))
 
-  assert len(images) > 0
-  assert len(labels) > 0
+    input_keys = args.inputs
+    output_keys = args.outputs
+    assert input_keys is not None, "require input column names when using csvfile"
+    assert output_keys is not None, "require output column names when using csvfile"
 
-  def image_loader(filename):
-    x = imread(filename).astype(np.float) / 255.0
-    x = resize(x, tuple(args.size), anti_aliasing=True)
-    return x
+    # create sets of tuples for the inputs and ouputs
+    inputs = list(zip(*[data[k] for k in input_keys]))
+    outputs = list(zip(*[data[k] for k in output_keys]))
+  elif args.images is not None and args.labels is not None:
+    # read the image filenames
+    inputs = [(x,) for x in sorted(glob(args.images))]
+    outputs = [(x,) for x in sorted(glob(args.labels))]
+  else:
+    raise NotImplementedError("Cannot generate data from nothing")
 
-  def label_loader(filename):
-    x = imread(filename).astype(np.uint8)
-    x = (x==1).astype(np.float)
-    x = resize(x, tuple(args.size), anti_aliasing=False)
-    return x
-
-  def image_validator(x):
-    return ((len(x.shape) == 3) and
-            (x.shape[0] == args.size[0]) and
-            (x.shape[1] == args.size[1]) and
-            (x.shape[2] == 3))
-
-  def label_validator(x):
-    return ((len(x.shape) == 2) and
-            (x.shape[0] == args.size[0]) and
-            (x.shape[1] == args.size[1]))
+  logger.info("found %i/%i inputs/outputs" % (len(inputs), len(outputs)))
+  assert len(inputs) > 0
+  assert len(outputs) > 0
+  assert len(inputs) == len(outputs)
 
   # create a generator
   gen = create_image_from_filenames_generator(
-      images,
-      labels,
-      image_preprocess_fn=image_loader,
+      inputs,
+      outputs,
+      image_preprocess_fn=input_loader,
       label_preprocess_fn=label_loader,
-      image_validation_fn=image_validator,
+      image_validation_fn=input_validator,
       label_validation_fn=label_validator,
       augmentation_fn=None,
       debug_output_path=None

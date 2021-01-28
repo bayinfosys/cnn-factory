@@ -1,6 +1,8 @@
 ARG BASE=tensorflow/tensorflow:2.2.2-py3
 FROM $BASE
 
+LABEL maintainer="ed@bayis.co.uk"
+
 COPY requirements.serve.txt /tmp/requirements.txt
 
 # we have to install opencv for imgaug

@@ -15,10 +15,17 @@ def default_model_builder(
       model_type="unet",
       image_shape=(None, None),
       channel_count=3,
-      network_depth=5
+      network_depth=5,
+      output_definitions=None
     ):
   """
   build and return a model to the caller
+  model_type: name of the model architecture type
+  image_shape: spatial dimensions of image data
+  channel_count: number of channels in the image
+  network_depth: number of layers in the network
+  outputs: map of output names to output definitions
+           {<name>:{"size": <output shape>}}
   """
   logger.info("building model with: '%s', '%s', %i, %i" % (
       model_type, str(image_shape), channel_count, network_depth))
@@ -28,7 +35,8 @@ def default_model_builder(
     model = MODEL_BUILDERS[model_type](
                 image_shape=image_shape,
                 channel_count=channel_count,
-                network_depth=network_depth
+                network_depth=network_depth,
+                output_definitions=output_definitions
             )()
   except KeyError as e:
     logger.error("'%s' is not a supported model type" % model_type)

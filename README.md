@@ -16,7 +16,7 @@ docker run \
   --runtime=nvidia \
   -v $(pwd)/data:/data \
   -v $(pwd)/output:/out \
-  anax32/cnn-factory \
+  bayis/cnn-factory \
     --modelname 'my-model' \
     --images '/data/images/*.png' \
     --masks '/data/labels/*.png' \
@@ -43,5 +43,5 @@ docker run \
   -v $(pwd)/output:/out \
   -u $(id -u):$(id -g) \
   -e ARGS_FILE=/args/train.args.run.01 \
-  anax32/cnn-factory
+  bayis/cnn-factory
 ```

@@ -12,7 +12,7 @@
     {"help": "width and height of the input images",
      "type": "int",
      "nargs": "+",
-     "default": "(256, 256)"
+     "default": [256, 256]
     },
   "--channel-count":
     {"help": "number of channels in the input image data",
@@ -30,14 +30,22 @@
      "default": 3
     },
 
+  "--csv":
+    {"help": "csv file containing training data"},
+  "--inputs":
+    {"help": "csv column names of input data",
+     "nargs": "+"
+    },
+  "--outputs":
+    {"help": "output definitions for the model in json format '{<name>:{\"loss\": <loss_fn>, \"weight\": <loss weight>}}'",
+     "nargs": "+"
+    },
+
   "--images":
-    {"help": "glob file pattern of a list of images",
-     "required": "True"
-    },
+    {"help": "glob file pattern of a list of images"},
   "--masks":
-    {"help": "glob file pattern of a list of masks matching the image names",
-     "required": "True"
-    },
+    {"help": "glob file pattern of a list of masks matching the image names"},
+
   "--num-augs":
     {"help": "number of augmentations to apply for each input",
      "type": "int",
@@ -79,13 +87,6 @@
                  "step_decay"],
      "default": "none"
     },
-  "--loss-function":
-    {"help": "loss function",
-     "choices": ["bce_dice", "dice",
-                 "binary_crossentropy",
-                 "jaccard"],
-     "default": "dice"
-    },
   "--optimizer":
     {"help": "optimisation strategy",
      "choices": ["sgd", "rmsprop", "adagrad",
@@ -95,8 +96,7 @@
     },
   "--training-metrics":
     {"help": "metrics to run during training",
-     "nargs": "+",
-     "default": "dice"
+     "nargs": "+"
     },
   "--training-steps":
     {"help": "maximum training steps per epoch",

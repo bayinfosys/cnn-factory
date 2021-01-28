@@ -1,6 +1,8 @@
 ARG BASE=tensorflow/tensorflow:2.2.2-gpu-py3
 FROM $BASE
 
+LABEL maintainer="ed@bayis.co.uk"
+
 RUN apt-get update && \
     apt-get install --no-install-recommends -qqy libgl1-mesa-glx
 

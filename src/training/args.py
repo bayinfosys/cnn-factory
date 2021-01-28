@@ -71,7 +71,7 @@ def parse_arguments(parser):
       arguments = json.load(f)
   else:
     logger.info("parsing commandline")
-    arguments = sys.argv
+    arguments = sys.argv[1:]
 
   logger.info("arguments: '%s'" % json.dumps(arguments))
   args = parser.parse_args(arguments)

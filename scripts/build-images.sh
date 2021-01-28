@@ -11,6 +11,18 @@
 
 docker \
   build \
+  -t bayis/generator \
+  -f docker/generator/Dockerfile \
+  .
+
+docker \
+  build \
+  -t bayis/cnn-factory \
+  -f docker/train/Dockerfile \
+  .
+
+docker \
+  build \
   -t bayis/cnn-serve \
   -f docker/serve/Dockerfile \
   .

@@ -24,7 +24,7 @@ docker run \
   -v $(pwd)/data/dummy:/data \
   -v $(pwd)/output:/out \
   -u $(id -u):$(id -g) \
-  anax32/cnn-factory \
+  bayis/cnn-factory \
     --modelname 'my-model' \
     --images '/data/images/*.png' \
     --masks '/data/labels/*.png' \
