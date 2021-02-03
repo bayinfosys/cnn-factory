@@ -6,8 +6,6 @@ from os.path import join, basename
 
 import tensorflow as tf
 
-from tensorflow.keras import backend as K
-
 import numpy as np
 
 from common.loss import (dice_coef,
@@ -36,6 +34,12 @@ logger = logging.getLogger(__name__)
 # disable loggers
 logging.getLogger("PIL").setLevel(logging.WARNING)
 logging.getLogger("matplotlib").setLevel(logging.WARNING)
+
+
+# HACK tf 4.2.1 memory leak
+for gpu in tf.config.experimental.list_physical_devices('GPU'):
+  tf.config.experimental.set_memory_growth(gpu, True)
+# HACK
 
 
 def default_model_compiler(
@@ -82,12 +86,14 @@ def default_model_compiler(
   }
 
   loss = {k:loss_fns[v["loss"]] for k,v in output_definitions.items()}
+  weights = {k:v["weight"] for k,v in output_definitions.items()}
 
   # compile the model
   model.compile(
       optimizer=optimizer_fns[optimizer_name](**optimizer_args),
       loss=loss,
-      metrics=[metric_fns[m] for m in metric_names] if metric_names is not None else None
+      loss_weights=weights,
+      metrics=[metric_fns[m] for m in metric_names] if metric_names is not None else None,
   )
 
 
@@ -237,6 +243,7 @@ if __name__ == "__main__":
               image_shape=tuple(args.image_shape),
               channel_count=3,
               network_depth=args.network_depth,
+              filter_sizes=args.filter_sizes,
               output_definitions=output_definitions,
           )
 
@@ -260,16 +267,11 @@ if __name__ == "__main__":
   model.fit(training_generator,
             steps_per_epoch=training_steps*(1+args.num_augs),
             epochs=args.num_epochs,
-            validation_data = validation_generator,
-            validation_steps = validation_steps,
+            validation_data=validation_generator,
+            validation_steps=validation_steps,
             #validation_data=validation_data,
             callbacks=callbacks,
             #verbose=verbosity,
             max_queue_size=1,
             workers=1,
             use_multiprocessing=False)
-
-  # FIXME: can we ditch this? the checkpoint should handle all this for us
-#  model_filename = join(output_dir, modelname + ".hdf5")
-#  logger.info("saving model to '%s'" % model_filename)
-#  model.save(model_filename)

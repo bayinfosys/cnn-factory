@@ -10,7 +10,8 @@ from tensorflow.keras.layers import (Input, Activation,
                                      MaxPooling2D, Conv2DTranspose, UpSampling2D,
                                      concatenate, add,
                                      Flatten, Dense, Reshape,
-                                     GlobalMaxPool2D, GlobalMaxPool3D)
+                                     GlobalAveragePooling2D, GlobalMaxPool2D,
+                                     GlobalAveragePooling3D, GlobalMaxPool3D)
 
 from tensorflow.keras.models import Model
 
@@ -159,7 +160,7 @@ class UNet():
           "trns": UpSampling2D if self.decoder_type == "upsample" else Conv2DTranspose,
           "link": link_layers[self.layer_link_type],
           "latent": Convolution2D if self.latent_space_mode == "normal" else Dense,
-          "global": GlobalMaxPool2D,
+          "global": GlobalAveragePooling2D,
       }
     elif len(self.image_shape) == 3:
       return {
@@ -168,7 +169,7 @@ class UNet():
           "trns": UpSampling3D if self.decoder_type == "upsample" else Conv3DTranspose,
           "link": link_layers[self.layer_link_type],
           "latent": Convolution3D if self.latent_space_mode == "normal" else Dense,
-          "global": GlobalMaxPool3D,
+          "global": GlobalAveragePooling3D,
       }
 
     else:
@@ -268,14 +269,15 @@ class UNet():
     layer_stack.append(A)
 
   def output_block(self, type, filter_size, name, layer_stack):
-    # FIXME: encapsulate this into "output_layer" function which creates the block
     if type == "segmentation":
+      # segmentation prediction will produce one output per label
       return self.function_context["conv"](
                1,
                self.output_conv_kernel,
                activation="sigmoid",
                name=name)(layer_stack.pop())
     elif type == "image":
+      # image prediction output will match the channel depth of the input
       return self.function_context["conv"](
                self.channel_count,
                self.output_conv_kernel,
@@ -283,20 +285,14 @@ class UNet():
                name=name)(layer_stack.pop())
     elif type == "category":
       # size here is the number of categories in a one-hot encoding
-      M = self.function_context["global"]()(layer_stack.pop())
-      M = Flatten()(M)
-      #M = Dense(128, activation="relu")(M)
+      M = self.function_context["conv"](filter_size, self.output_conv_kernel, activation="relu")(layer_stack.pop())
       logger.debug(str(M))
-      return Dense(filter_size, activation="softmax", name=name)(M)
+      return self.function_context["global"]()(M)
     elif type == "numeric":
       # regression requires no activation function
-      M = self.function_context["global"]()(layer_stack.pop())
+      M = self.function_context["conv"](1, self.output_conv_kernel, activation="linear")(layer_stack.pop())
       logger.debug(str(M))
-      M = Flatten()(M)
-      logger.debug(str(M))
-      M = Dense(filter_size, activation=None)(M)
-      logger.debug(str(M))
-      return Dense(1, activation=None, name=name)(M)
+      return self.function_context["global"]()(layer_stack.pop())
     else:
       raise NotImplementedError("unknown output type: '%s'" % type)
 

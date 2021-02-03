@@ -37,14 +37,17 @@ def default_image_filename_preprocess(filename):
     logger.error("%s: %s" % (filename, str(e)))
     raise FileNotFoundError(filename) from e
 
+  if len(x.shape) == 2 or x.shape[-1] != 3:
+    x = np.stack((x,)*3, axis=-1)
+
   return x
 
 
-def default_label_filename_preprocess(filename, label_value=1):
+def default_label_filename_preprocess(filename, min_label_value=1, max_label_value=128):
   """
   default preprocessing for label image filenames is
   to load the file from disk as uint8, convert to a
-  boolean array where values == label_value and
+  boolean array where min_label_value <= value < max_label_value
   return that as a float numpy array
   """
   from skimage.io import imread
@@ -55,7 +58,7 @@ def default_label_filename_preprocess(filename, label_value=1):
     logger.error("could not load: '%s'" % filename)
     raise
 
-  y = (y==label_value).astype(np.float)
+  y = ((y>=min_label_value) & (y<max_label_value)).astype(np.float)
 
   return y[..., np.newaxis]
 
@@ -117,8 +120,12 @@ def default_input_loader(Xs):
   # FIXME: somehow, take a bool->fn map as parameter to invert
   #        the data type handling, so we are not tied to these rules
   for x in Xs:
-    if isinstance(x, str) and exists(x):
-      v = default_image_filename_preprocess(x)
+    if isinstance(x, str):
+      if not exists(x):
+        logger.warning("'%s' does not exist" % x)
+        continue
+      else:
+        v = default_image_filename_preprocess(x)
     else:
       v = np.array([x]).astype(np.float)
 

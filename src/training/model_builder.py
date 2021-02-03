@@ -16,6 +16,7 @@ def default_model_builder(
       image_shape=(None, None),
       channel_count=3,
       network_depth=5,
+      filter_sizes=None,
       output_definitions=None
     ):
   """
@@ -36,6 +37,7 @@ def default_model_builder(
                 image_shape=image_shape,
                 channel_count=channel_count,
                 network_depth=network_depth,
+                filter_sizes=filter_sizes,
                 output_definitions=output_definitions
             )()
   except KeyError as e:

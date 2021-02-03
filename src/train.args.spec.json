@@ -24,6 +24,11 @@
      "type": "int",
      "default": 1
     },
+  "--filter-sizes":
+    {"help": "filter sizes for each layer in the network",
+     "type": "int",
+     "nargs": "+"
+    },
   "--network-depth":
     {"help": "depth parameter of the network architecture",
      "type": "int",

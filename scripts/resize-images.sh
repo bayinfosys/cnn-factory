@@ -10,8 +10,9 @@ docker run \
   -it \
   --rm \
   -e LOG_LEVEL=INFO \
-  -v $(pwd)/data:/data \
+  -v $(pwd)/data:/data:ro \
+  -v $(pwd)/data:/output \
   bayis/transformer \
     -i /data/images/*.jpg \
-    -o /data/images-128-128 \
+    -o /output/images-128-128 \
     -s 128 128

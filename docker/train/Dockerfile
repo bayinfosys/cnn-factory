@@ -1,4 +1,4 @@
-ARG BASE=tensorflow/tensorflow:2.2.2-gpu-py3
+ARG BASE=tensorflow/tensorflow:2.2.2-gpu
 FROM $BASE
 
 LABEL maintainer="ed@bayis.co.uk"
