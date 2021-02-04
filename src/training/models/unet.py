@@ -366,25 +366,34 @@ class UNet():
     # build decoder layers by reversing the filter_size array
     outputs = []
 
-    for decoder_name, decoder in self.decoder_definitions.items():
+    # build a single decoder for all image/segmentation types
+    if any([v["type"] in ["image", "segmentation"] for v in self.decoder_definitions.values()]):
       local_layer_stack = list(layer_stack)
 
-      # only image or segmentation outputs require the full upscaling decoder
-      if decoder["type"] == "image" or decoder["type"] == "segmentation":
-        for i, filter_size in enumerate(self.filter_sizes[:-1][::-1]):
-          idx = len(self.filter_sizes)+i
-          name = "%s_%i" % (decoder_name, idx)
-          logger.info("building: '%s'" % name)
-          self.decoder_block(filter_size, len(decoder["size"]), local_layer_stack)
+      for i, filter_size in enumerate(self.filter_sizes[:-1][::-1]):
+        idx = len(self.filter_sizes)+i
+        name = "%s_%i" % ("image_decoder", idx)
+        logger.info("building: '%s'" % name)
+        # FIXME: '2' here is the dims for the output (2D, 3D, etc), we need to separate branches
+        #        based on output data shape
+        self.decoder_block(filter_size, 2, local_layer_stack)
 
-      # build the final output layer dependent on which data type is requested
-      # FIXME: rename "size" to "shape", all the way
-      output = self.output_block(decoder["type"], decoder["size"], decoder_name, local_layer_stack)
-      logger.debug(str(output))
-      outputs.append(output)
+      for decoder_name, decoder in [(k, v) for k,v in self.decoder_definitions.items() if v["type"] in ["image", "segmentation"]]:
+        output_layer_stack = list(local_layer_stack)
+        # FIXME: rename "size" to "shape", all the way
+        output = self.output_block(decoder["type"], decoder["size"], decoder_name, output_layer_stack)
+        logger.debug(str(output))
+        outputs.append(output)
+    else:
+      # build an output layer for all other outputs from the latent space
+      for decoder_name, decoder in [(k, v) for k,v in self.decoder_definitions.items() if v["type"] not in ["image", "segmentation"]]:
+        output_layer_stack = list(layer_stack)
+        output = self.output_block(decoder["type"], decoder["size"], decoder_name, output_layer_stack)
+        logger.debug(str(output))
+        outputs.append(output)
 
-      # this is an error in the model structure, it is quite serious
-      #assert len(local_layer_stack) == 0, "local_layer_stack not exhausted (%i)" % len(local_layer_stack)
+    # this assert would indicate an error in the model structure, it is quite serious
+    #assert len(local_layer_stack) == 0, "local_layer_stack not exhausted (%i)" % len(local_layer_stack)
 
     logger.info("created %i outputs" % len(outputs))
 
