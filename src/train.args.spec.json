@@ -8,22 +8,6 @@
      "choices": ["unet", "convnet"],
      "default": "unet"
     },
-  "--image-shape":
-    {"help": "width and height of the input images",
-     "type": "int",
-     "nargs": "+",
-     "default": [256, 256]
-    },
-  "--channel-count":
-    {"help": "number of channels in the input image data",
-     "type": "int",
-     "default": 3
-    },
-  "--label-count":
-    {"help": "number of label values per label image",
-     "type": "int",
-     "default": 1
-    },
   "--filter-sizes":
     {"help": "filter sizes for each layer in the network",
      "type": "int",
@@ -38,18 +22,13 @@
   "--csv":
     {"help": "csv file containing training data"},
   "--inputs":
-    {"help": "csv column names of input data",
+    {"help": "input definitions for the model in json format '{<name>:{\"type\": (image)}'",
      "nargs": "+"
     },
   "--outputs":
-    {"help": "output definitions for the model in json format '{<name>:{\"loss\": <loss_fn>, \"weight\": <loss weight>}}'",
+    {"help": "output definitions for the model in json format '{<name>:{\"type\": (image|segmentation|category|numeric), \"loss\": <loss_fn>, \"weight\": <loss weight>, \"shape\": <data shape>}}'",
      "nargs": "+"
     },
-
-  "--images":
-    {"help": "glob file pattern of a list of images"},
-  "--masks":
-    {"help": "glob file pattern of a list of masks matching the image names"},
 
   "--num-augs":
     {"help": "number of augmentations to apply for each input",

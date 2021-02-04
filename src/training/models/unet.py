@@ -24,12 +24,17 @@ class UNet():
   class to construct a Unet
 
   takes as input:
-    image_shape: tuple with size of spatial dimensions in the image;
-                 (x, y) for 2D, (x, y, z) for 3D, etc
-    channel_count: number of data channels in the image;
-                   1 for luminance, 3 for rgb, etc
     network_depth: number of layers to create in the network
+    input_definitions: map of input names to definitions
     output_definitions: [optional] map of output names to definitions
+
+  input_definitions is a map of input_definition:
+  ```
+  {
+    "type": (category|numeric|segmentation|image)
+    "shape": shape of the input data array; images must have channel as the last entry
+  }
+  ```
 
   output_definitions is a map of output_definition:
   ```
@@ -57,10 +62,9 @@ class UNet():
   """
   def __init__(
       self,
-      image_shape,
-      channel_count=1,
       network_depth=6,
       filter_sizes=None,
+      input_definitions=None,
       output_definitions=None):
     """
     initialise the variables in the model.
@@ -69,11 +73,13 @@ class UNet():
                   defines the size of the latent space, and the reversed array defines the decoder
                   filter progression.
 
+    input_definitions: map of input names to input definitions,
+                       if none is specified, the input is assumed to be a 128x128x3 channel image
     output_definitions: map of output names to output definitions
                         if none is specified, the default segmentation output is assumed
     """
-    self.image_shape = image_shape
-    self.channel_count = channel_count
+#    self.image_shape = image_shape
+#    self.channel_count = channel_count
     self.depth = network_depth
     self.decoder_type = "upsample" # (upsample|convolution)
     self.latent_space_mode = "normal" # (normal|vae)
@@ -84,6 +90,13 @@ class UNet():
 
     if len(self.filter_sizes) != self.depth:
       raise ValueError("filter_sizes length must match network depth (%i != %i)" % (len(self.filter_sizes), self.depth))
+
+    if input_definitions is None:
+      logger.warning("no input definitions; using default")
+      self.encoder_definitions = {"input": {"type": "image", "shape": (256, 256, 3), "weight": 1.0}}
+    else:
+      logger.info("input_definitions: '%s'" % json.dumps(input_definitions))
+      self.encoder_definitions = input_definitions
 
     if output_definitions is None:
       logger.warning("no output definitions; using default")
@@ -96,18 +109,18 @@ class UNet():
     # FIXME: construct these parameters (and the function_context) into
     #        a large map object which can be passed around, serialised,
     #        and mocked for unit testing the block functions.
-    self.conv_size = (3, ) * len(self.image_shape)
-    self.pool_size = (2, ) * len(self.image_shape)
-    self.sigmoid_conv_size = (1, ) * len(self.image_shape)
+    #self.conv_size = (3, ) * len(self.image_shape)
+    #self.pool_size = (2, ) * len(self.image_shape)
+    #self.sigmoid_conv_size = (1, ) * len(self.image_shape)
 
     self.encoder_conv_params = {
-        "kernel_size": self.conv_size,
+        #"kernel_size": self.conv_size,
         "activation": "relu",
         "padding": "same"
     }
 
     self.encoder_pool_params = {
-        "pool_size": self.pool_size,
+        #"pool_size": self.pool_size,
         "padding": "same"
     }
 
@@ -115,11 +128,11 @@ class UNet():
         "activation": "relu"
     }
 
-    self.output_conv_kernel = (1, ) * len(self.image_shape)
+    # self.output_conv_kernel = (1, ) * len(self.image_shape)
 
     self.output_conv_params = {
         "filters": 32,
-        "kernel_size": self.output_conv_kernel,
+        # "kernel_size": self.output_conv_kernel,
         "activation": "relu",
         "padding": "same"
     }
@@ -153,7 +166,11 @@ class UNet():
     }
 
     # FIXME: 1D convolution
-    if len(self.image_shape) == 2:
+    # FIXME: this needs to be adjusted for the shape of the encoder/decoder branch
+    #        we are running on (maybed 2D and 3D input, 1D output, etc)
+    HACK_DIMS = self.encoder_definitions["image"]["shape"][:-1]
+
+    if len(HACK_DIMS) == 2:
       return {
           "conv": Convolution2D,
           "pool": MaxPooling2D,
@@ -162,7 +179,7 @@ class UNet():
           "latent": Convolution2D if self.latent_space_mode == "normal" else Dense,
           "global": GlobalAveragePooling2D,
       }
-    elif len(self.image_shape) == 3:
+    elif len(HACK_DIMS) == 3:
       return {
           "conv": Convolution3D,
           "pool": MaxPooling3D,
@@ -173,9 +190,9 @@ class UNet():
       }
 
     else:
-      raise NotImplementedError("Cannot build function context for %iD images" % len(self.image_shape))
+      raise NotImplementedError("Cannot build function context for %iD images" % len(HACK_DIMS))
 
-  def encoder_block(self, filter_size, layer_stack):
+  def encoder_block(self, filter_size, dims, layer_stack):
     """
     construct an encoder block
       conv
@@ -185,9 +202,11 @@ class UNet():
     conv_params = {}
     conv_params.update(self.encoder_conv_params)
     conv_params["filters"] = filter_size
+    conv_params["kernel_size"] = (3, ) * dims
 
     pool_params = {}
     pool_params.update(self.encoder_pool_params)
+    pool_params["pool_size"] = (2, ) * dims
 
     A = self.function_context["conv"](**conv_params)(layer_stack.pop())
     logger.debug(str(A))
@@ -208,9 +227,14 @@ class UNet():
       dense
       reshape
     """
+    # FIXME: if the latent step is not a dense layer, we should not do convolution here,
+    #        just concatenate the outputs from the convolution encoders and pass them out
     conv_params = {}
     conv_params.update(self.encoder_conv_params)
     conv_params["filters"] = filter_size
+
+    # FIXME: HACK
+    conv_params["kernel_size"] = (3, ) * 2
 
     latent_params = {}
     latent_params.update(self.latent_params)
@@ -240,7 +264,7 @@ class UNet():
 
     layer_stack.append(A)
 
-  def decoder_block(self, filter_size, layer_stack):
+  def decoder_block(self, filter_size, dims, layer_stack):
     """
     decoder block
       upsample/transpose convolution
@@ -251,13 +275,16 @@ class UNet():
     conv_params = {}
     conv_params.update(self.encoder_conv_params)
     conv_params["filters"] = filter_size
+    conv_params["kernel_size"] = (3, ) * dims
+
+    pool_size = (2, ) * dims
 
     if (self.function_context["trns"] is UpSampling2D or
         self.function_context["trns"] is UpSampling3D):
-      deconv = self.function_context["trns"](self.pool_size)(layer_stack.pop())
+      deconv = self.function_context["trns"](pool_size)(layer_stack.pop())
     elif (self.function_context["trns"] is Conv2DTranspose or
           self.function_context["trns"] is Conv3DTranspose):
-      deconv = self.function_context["trns"](filter_size, stride_size=self.pool_size)(layer_stack.pop())
+      deconv = self.function_context["trns"](filter_size, stride_size=pool_size)(layer_stack.pop())
 
     logger.debug("linking: [%s]-[%s]" % (str(deconv), str(layer_stack[-1])))
     A = self.function_context["link"]([deconv, layer_stack.pop()])
@@ -269,6 +296,9 @@ class UNet():
     layer_stack.append(A)
 
   def output_block(self, type, filter_size, name, layer_stack):
+    # FIXME: rename filter_size to shape, all the way
+    self.output_conv_kernel = (1, ) * len(filter_size)
+
     if type == "segmentation":
       # segmentation prediction will produce one output per label
       return self.function_context["conv"](
@@ -279,7 +309,8 @@ class UNet():
     elif type == "image":
       # image prediction output will match the channel depth of the input
       return self.function_context["conv"](
-               self.channel_count,
+               # self.channel_count, # FIXME: we don't have a global channel count anymore, match to an input? take as a param?
+               3,
                self.output_conv_kernel,
                activation="sigmoid",
                name=name)(layer_stack.pop())
@@ -305,17 +336,28 @@ class UNet():
 
     logger.info("UNET [%i] : %s" % (len(self.filter_sizes), str(self.filter_sizes)))
 
-    inputs = Input(self.image_shape + (self.channel_count, ))
-    layer_stack.append(inputs)
-    logger.debug(str(inputs))
+    if len(self.encoder_definitions) != 1:
+      raise NotImplementedError("Cannot process multiple inputs with this architecture")
 
-    # build encoder layers for all layers up the last layer
-    for idx, filter_size in enumerate(self.filter_sizes[:-1]):
-      name = "encoder_%i" % idx
-      logger.info("building: '%s'" % name)
-      self.encoder_block(filter_size, layer_stack)
+    # FIXME: take multiple inputs
+    # FIXME: how does this affect the layer stack? They must all end up at the same
+    #        shape for concat before the latent layer, and also be well-shaped for
+    #        linking to the decoder layers (where linking is requested? should we
+    #        just let the caller do whatever and pass the errors up? yes, I think so)
+    for encoder_name, encoder in self.encoder_definitions.items():
+      inputs = Input(encoder["shape"])
+      layer_stack.append(inputs)
+      logger.debug(str(inputs))
+
+      # build encoder layers for all layers up the last layer
+      for idx, filter_size in enumerate(self.filter_sizes[:-1]):
+        name = "encoder_%i" % idx
+        logger.info("building: '%s'" % name)
+        self.encoder_block(filter_size, len(encoder["shape"])-1, layer_stack)
 
     # build a latent space layer with the last number of filters
+    # FIXME: with multiple inputs, concatenate all the encoder outputs
+    #        to a single large array before feeding to the latent layer
     latent_size = self.filter_sizes[-1]
     name = "latent"
     logger.info("building: '%s'" % name)
@@ -333,9 +375,10 @@ class UNet():
           idx = len(self.filter_sizes)+i
           name = "%s_%i" % (decoder_name, idx)
           logger.info("building: '%s'" % name)
-          self.decoder_block(filter_size, local_layer_stack)
+          self.decoder_block(filter_size, len(decoder["size"]), local_layer_stack)
 
       # build the final output layer dependent on which data type is requested
+      # FIXME: rename "size" to "shape", all the way
       output = self.output_block(decoder["type"], decoder["size"], decoder_name, local_layer_stack)
       logger.debug(str(output))
       outputs.append(output)

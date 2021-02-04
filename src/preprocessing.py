@@ -43,12 +43,19 @@ def default_image_filename_preprocess(filename):
   return x
 
 
-def default_label_filename_preprocess(filename, min_label_value=1, max_label_value=128):
+def default_label_filename_preprocess(filename, label_set=None):
   """
   default preprocessing for label image filenames is
-  to load the file from disk as uint8, convert to a
-  boolean array where min_label_value <= value < max_label_value
-  return that as a float numpy array
+  to load the file from disk as uint8, converted to a
+  boolean array for training.
+
+  multiple labels can be merged into one bool array
+  by passing a callable or a list as label_set parameter:
+  if label_set is callable: (keep if label_set(<label_id>) is true)
+  if label_set is list: (keep if <label_id> in label_set)
+  if label_set is int: (keep if <label_id> == label_set)
+
+  returns bool map as a float numpy array
   """
   from skimage.io import imread
 
@@ -58,26 +65,36 @@ def default_label_filename_preprocess(filename, min_label_value=1, max_label_val
     logger.error("could not load: '%s'" % filename)
     raise
 
-  y = ((y>=min_label_value) & (y<max_label_value)).astype(np.float)
+  existing_labels = np.unique(y)
+  requested_labels = []
 
-  return y[..., np.newaxis]
+  if callable(label_set):
+    requested_labels = [l for l in existing_labels if label_set(l)]
+  elif isinstance(label_set, list):
+    requested_labels = [l for l in existing_labels if l in label_set]
+  elif isinstance(label_set, int):
+    requested_labels = [label_set]
+  else:
+    raise NotImplementedException("unknown label_set type: '%s'" % type(label_set))
+
+  label_img = np.isin(y, requested_labels).astype(float)
+
+  return label_img[..., np.newaxis]
 
 
-def validate_tensor_shape(X, expected_shape):
+def validate_tensor_shape(Xs, expected_shape):
   """
   return true if the shape of X matches the tuple expected_shape
   false otherwise
   """
-  # FIXME: I don't know how to pass this expected_shape through
-  #        How can we know the expected shape from the cli
-  return True
-#  assert isinstance(X, type(expected_shape))
-#  assert len(X) == len(expected_shape)
-#
-#  for x, ex in zip(X, expected_shape):
-#    assert all([i == j for i, j in zip(x.shape, ex)])
-#
-#  return True
+  def check(x, ex):
+    return len(x.shape) == len(ex) and all([i == j for i, j in zip(x.shape, ex)])
+
+  if isinstance(Xs, list): # mult input
+    assert isinstance(expected_shape, list), "when Xs is list, expected_shape must also be list"
+    return all([check(x, ex) for x, ex in zip(Xs, expected_shape)])
+  else:
+    return check(Xs, expected_shape)
 
 
 def convert_to_unit_range(image):
@@ -134,18 +151,31 @@ def default_input_loader(Xs):
   return i
 
 
-def default_label_loader(ys, types, shapes):
+def default_label_loader(ys, types, shapes, labels=None):
   """
   load a label data from a tuple with one or more entries
+
+  # TODO: to align the types, shapes and label definitions
+  #       with the ys array we use the index of the ys iterator
+  #       which means, we require types, shapes and labels to
+  #       be same-shaped. Much prefer to have key-name indexing
+  #       by passing the input_definitions through to this level
   """
   from os.path import exists
 
   i = []
 
   for idx, y in enumerate(ys):
-    if types[idx] == "image" or types[idx] == "segmentation":
-      assert isinstance(y, str) and exists(y)
-      v = default_label_filename_preprocess(y)
+    if types[idx] == "image":
+      assert isinstance(y, str) and exists(y), "'%s' does not exist" % str(y)
+      v = default_image_filename_preprocess(y)
+    elif types[idx] == "segmentation":
+      # logger.debug("loading image '%s'" % y)
+      assert isinstance(y, str) and exists(y), "'%s' does not exist" % str(y)
+
+      input_labels = None if labels is None else labels[idx]
+
+      v = default_label_filename_preprocess(y, label_set=input_labels)
     elif types[idx] == "category":
       # one-hot
       v = np.zeros(shapes[idx]).astype(np.float)

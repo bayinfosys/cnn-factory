@@ -150,37 +150,34 @@ if __name__ == "__main__":
     data = csv_to_lists(args.csv)
     logger.info("read %i/%i rows/columns" % (len(list(data.values())[0]), len(data.keys())))
 
-    input_keys = args.inputs
+    input_definitions = {}
     output_definitions = {}
+
+    for iks in [json.loads(x) for x in args.inputs]:
+      input_definitions.update(iks)
 
     for oks in [json.loads(x) for x in args.outputs]:
       output_definitions.update(oks)
 
-    assert input_keys is not None, "require input column names when using csvfile"
+    assert input_definitions is not None, "require input column names when using csvfile"
     assert output_definitions is not None, "require output column names when using csvfile"
 
-    logger.info("inputs: '%s'" % str(input_keys))
+    logger.info("inputs: '%s'" % str(input_definitions))
     logger.info("outputs: '%s'" % str(output_definitions))
 
     # create sets of tuples for the inputs and ouputs
-    inputs = list(zip(*[data[k] for k in input_keys]))
+    inputs = list(zip(*[data[k] for k in input_definitions]))
     outputs = list(zip(*[data[k] for k in output_definitions]))
   elif args.images is not None and args.labels is not None:
     # FIXME: scrap this glob loading; if people want to glob they can build a csv...
-    # read the image filenames
-    logger.warning("GLOB LOADING IS DEPRECATED, GO FUCK YOUSELF")
-    inputs = [(x,) for x in sorted(glob(args.images))]
-    outputs = [(y,) for y in sorted(glob(args.masks))]
-
-    input_keys = None
-    output_definitions = None
+    logger.error("GLOB LOADING IS DEPRECATED, GO FUCK YOUSELF")
+    raise NotImplementedError("Glob loading is deprecated you autistic fuck")
   else:
     raise NotImplementedError("Cannot generate data from nothing")
 
   logger.info("found %i/%i inputs/outputs" % (len(inputs), len(outputs)))
   assert len(inputs) > 0
   assert len(outputs) > 0
-  assert len(inputs) == len(outputs)
 
   # FIXME: here we want to load a function from /user.py given the function name in args
   # TODO: should we have these functions accept the args variable? we could wrap all the
@@ -188,16 +185,33 @@ if __name__ == "__main__":
   data_preprocess_fn = default_input_loader if args.data_preprocess_fn is None else None
 
 #  label_preprocess_fn = default_label_loader if args.label_preprocess_fn is None else None
+
+  # FIXME: we create these lists so that the validators can check the data inside and after
+  #        the generators to try and prevent bad data going into the pipeline and giving
+  #        weird errors. The validators get data from the generator, which does not have
+  #        the input/output names available. We are dependent on the ordering of the lists
+  #        being consistent across all areas; seems a bit of a risk and we should prefer
+  #        key name references.
+  expected_input_shapes = [x["shape"] for x in input_definitions.values()]
+  expected_output_shapes = [tuple(x["size"])+(1,) for x in output_definitions.values()]
+  type_list = [o["type"] for o in output_definitions.values()]
+  shape_list = [o["size"] for o in output_definitions.values()]
+  label_list = [o["label"] for o in output_definitions.values()]
   logger.debug("types: '%s'" % str([o["type"] for o in output_definitions.values()]))
   logger.debug("shapes: '%s'" % str([o["size"] for o in output_definitions.values()]))
+  logger.debug("labels: '%s'" % str([o["label"] for o in output_definitions.values()]))
+  logger.debug("inputs: '%s'" % str(expected_input_shapes))
+  logger.debug("outputs: '%s'" % str(expected_output_shapes))
+
   if args.label_preprocess_fn is None:
-    label_preprocess_fn = lambda y: default_label_loader(y, types=[o["type"] for o in output_definitions.values()], shapes=[o["size"] for o in output_definitions.values()])
+    label_preprocess_fn = lambda y: default_label_loader(y, types=type_list, shapes=shape_list, labels=label_list)
   else:
     label_preprocess_fn = args.data_preprocess_fn
 
-
-  data_validation_fn = validate_tensor_shape if args.data_validation_fn is None else None
-  label_validation_fn = validate_tensor_shape if args.label_validation_fn is None else None
+  # these validators are automatically created based on the input/output definitions
+  # we can still override them to provide other checks of the data (distributions, NaNs etc)
+  data_validation_fn = lambda x: validate_tensor_shape(x, expected_input_shapes) if args.data_validation_fn is None else None
+  label_validation_fn = lambda y: validate_tensor_shape(y, expected_output_shapes) if args.label_validation_fn is None else None
 
   # DATA
   from sklearn.model_selection import train_test_split
@@ -218,8 +232,8 @@ if __name__ == "__main__":
       train_y,
       image_preprocess_fn=data_preprocess_fn,
       label_preprocess_fn=label_preprocess_fn,
-      image_validation_fn=lambda x: data_validation_fn(x, tuple(args.image_shape) + (3,)),
-      label_validation_fn=lambda x: label_validation_fn(x, tuple(args.image_shape) + (1,)),
+      image_validation_fn=data_validation_fn,
+      label_validation_fn=label_validation_fn,
       shuffle_data=args.shuffle_data,
       augmentation_fn=augmentation_fn,
   )()
@@ -229,8 +243,8 @@ if __name__ == "__main__":
       test_y,
       image_preprocess_fn=data_preprocess_fn,
       label_preprocess_fn=label_preprocess_fn,
-      image_validation_fn=lambda x: data_validation_fn(x, tuple(args.image_shape) + (3,)),
-      label_validation_fn=lambda x: label_validation_fn(x, tuple(args.image_shape) + (1,)),
+      image_validation_fn=data_validation_fn,
+      label_validation_fn=label_validation_fn,
       shuffle_data=args.shuffle_data
   )()
 
@@ -240,10 +254,9 @@ if __name__ == "__main__":
   # MODEL
   model = default_model_builder(
               model_type=args.modeltype,
-              image_shape=tuple(args.image_shape),
-              channel_count=3,
               network_depth=args.network_depth,
               filter_sizes=args.filter_sizes,
+              input_definitions=input_definitions,
               output_definitions=output_definitions,
           )
 

@@ -74,7 +74,7 @@ def create_image_from_filenames_generator(
           continue
 
         if label_validation_fn(i_y) is False:
-          logger.warning("'%s' failed label validation" % y)
+          logger.warning("'%s' failed label validation" % str(y))
           Xs.remove(X)
           ys.remove(y)
           continue
