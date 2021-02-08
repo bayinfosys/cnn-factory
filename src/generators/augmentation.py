@@ -103,17 +103,22 @@ def create_image_augmentation_fn(num_augs = 4):
   def augmentation(X, y):
     for aug_id, _ in enumerate(range(num_augs)):
       det = seq.to_deterministic()
-      aug_x = det.augment_image(X)
+
+      # create the inputs
+      aug_x = [det.augment_image(x) for x in X]
 
       # make the mask rgb, then convert back and binarize
-      _y = np.stack((y[:,:,0],) * 3, axis=-1)
-      aug_y = det.augment_image(_y)
-      aug_y = aug_y.mean(axis=-1)[..., np.newaxis]
-      aug_y = (aug_y > aug_y.mean()).astype(np.uint8) * 255
+      aug_y = []
+
+      for i in y:
+        _y = np.stack((i[:,:,0],) * 3, axis=-1)
+        _aug_y = det.augment_image(_y)
+        _aug_y = _aug_y.mean(axis=-1)[..., np.newaxis]
+        aug_y.append((_aug_y > _aug_y.mean()).astype(np.uint8) * 255)
 
       # logger.debug("yielding: '%s'/'%s'" % (str(i_x.shape), str(i_y.shape)))
-      yield (aug_x.astype(np.float) / 255.0,
-             aug_y.astype(np.float) / 255.0)
+      yield ([x.astype(np.float) / 255.0 for x in aug_x],
+             [y.astype(np.float) / 255.0 for y in aug_y])
 
   if num_augs == 0:
     return None

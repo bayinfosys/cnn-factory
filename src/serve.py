@@ -116,16 +116,36 @@ def keras_inference(data):
   """
   infer with a keras model
   """
+  # FIXME: check the data.shape matches the input.layer.shape for this model
+
+  # HACK
+  if data.shape[-1] != 3:
+    if data.shape[-1] == 4:
+      data = data[...,:3]
+    else:
+      raise NotImplementedError("cannot process data with shape: '%s'" % data.shape)
+
   app.logger.debug("infering on: '%s:%s' [%0.2f -> %0.2f]" % (
       str(data.shape), str(data.dtype), data.min(), data.max()))
-  p = model.predict(data, batch_size=1, verbose=0)
-  app.logger.debug("inference: '%s:%s' [%0.2f -> %0.2f]" % (
-      str(p.shape), str(p.dtype), p.min(), p.max()))
-  p_ = (p[0, ..., 0]*255.0).astype(np.uint8)
-  app.logger.debug("inference: '%s:%s' [%0.2f -> %0.2f]" % (
-      str(p_.shape), str(p_.dtype), p_.min(), p_.max()))
 
-  img = PIL.Image.fromarray(p_, 'L')
+  p = model.predict(data, batch_size=1, verbose=0)
+
+  if isinstance(p, list):
+    for p_ in p:
+      app.logger.debug("inference: '%s:%s' [%0.2f -> %0.2f]" % (
+          str(p_.shape), str(p_.dtype), p_.min(), p_.max()))
+
+    response_img = ((np.hstack([p_[0,...,0] for p_ in p]))*255.0).astype(np.uint8)
+  else:
+    app.logger.debug("inference: '%s:%s' [%0.2f -> %0.2f]" % (
+        str(p.shape), str(p.dtype), p.min(), p.max()))
+
+    response_img = (p[0, ..., 0]*255.0).astype(np.uint8)
+
+  app.logger.debug("inference: '%s:%s' [%0.2f -> %0.2f]" % (
+      str(response_img.shape), str(response_img.dtype), response_img.min(), response_img.max()))
+
+  img = PIL.Image.fromarray(response_img)
 
   output = io.BytesIO()
   img.save(output, format="png")
@@ -154,9 +174,11 @@ library internally.
 
 SPECIALISATION ORDER OF PRECEDENCE is DATATYPE -> MODELTYPE -> LIBRARY
 """
+import io
+
 mime_readers = {
     "image/jpeg": lambda buffer: np.asarray(PIL.Image.open(buffer))[np.newaxis, ...],
-    "image/png": lambda buffer: np.asarray(PIL.Image.open(buffer))[np.newaxis, ...],
+    "image/png": lambda buffer: np.asarray(PIL.Image.open(io.BytesIO(buffer)))[np.newaxis, ...],
     "application/json": lambda buffer: json.loads(buffer, strict=False),
     "application/yaml": lambda buffer: yaml.load(buffer, Loader=yaml.SafeLoader)
 }
@@ -172,6 +194,11 @@ def inference():
   this function handles all the verification of the upload
   format, extraction of data in model compatible form, and
   passing to 'process_upload'.
+
+  post data to this endpoint with:
+  ```
+  curl -v -X POST -H "content-type: image/png" -d '@myimg.png' http://localhost:8000/infer
+  ```
   """
   try:
     content_type = request.headers["Content-Type"]
@@ -184,10 +211,9 @@ def inference():
   except KeyError:
     return jsonify({"error": "require content-length header"}), 411
 
-  bytes_buffer = io.BytesIO(request.data)
+  bytes_buffer = bytearray(request.data)
 
-  data_hash = hashlib.md5(bytes_buffer.read()).hexdigest()
-  bytes_buffer.seek(0)
+  data_hash = hashlib.md5(bytes_buffer).hexdigest()
   app.logger.info("data_hash: '%s'" % data_hash)
 
   try:
